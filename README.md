@@ -18,5 +18,13 @@ Paper [Arxiv](https://arxiv.org/abs/2503.08683)
 ## Citation
 
 ```
-
+@misc{liu2025colmdriverllmbasednegotiationbenefits,
+      title={CoLMDriver: LLM-based Negotiation Benefits Cooperative Autonomous Driving}, 
+      author={Changxing Liu and Genjia Liu and Zijun Wang and Jinchang Yang and Siheng Chen},
+      year={2025},
+      eprint={2503.08683},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2503.08683}, 
+}
 ```
