@@ -245,8 +245,10 @@ bash scripts/eval/eval_planner_e2e.sh 0,1 ckpt/colmdriver/percpetion covlm_cmd_e
 
 #### Data generation
 
-- Extract information from V2Xverse data: [MLLMs/data_transfer_sum.py](https://github.com/cxliu0314/CoLMDriver/MLLMs/data_transfer_sum.py) 
+- Extract information from V2Xverse data (mentioned above): [MLLMs/data_transfer_sum.py](https://github.com/cxliu0314/CoLMDriver/MLLMs/data_transfer_sum.py) 
 - Generate json format training data: [MLLMs/data_transfer_query.py](https://github.com/cxliu0314/CoLMDriver/MLLMs/data_transfer_query.py)
+
+Our training data is also provided in [google drive](https://drive.google.com/file/d/1RH9iciUJ7fK5JpLSbYzCC_8Eb-hZnv9E/view?usp=sharing) for reference. Since the images are originated from local V2Xverse dataset, you still need to download the dataset to get full access.
 
 #### Lora Finetuning
 
