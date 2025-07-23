@@ -2,7 +2,7 @@
 # Usage:
 # $1: cuda device
 # $2: Carla port
-# $3: method name (colmdriver/codriving/tcp/vad/uniad/lmdrive)
+# $3: method name (colmdriver/colmdriver_rulebase/codriving/tcp/vad/uniad/lmdrive)
 # $4: inference latency (ideal/realtime)
 # $5: scenario type (Interdrive_all/Interdrive_npc/Interdrive_no_npc)
 # $6: specific route IDs to run (comma-separated numbers, optional, e.g., 1,2,3)
@@ -30,6 +30,11 @@ case $method in
         agent="colmdriver_agent"
         config="colmdriver_config"
         method_tag="colmdriver"
+        ;;
+    colmdriver_rulebase)
+        agent="colmdriver_agent"
+        config="colmdriver_rulebase_config"
+        method_tag="colmdriver_rulebase"
         ;;
     codriving)
         agent="pnp_agent_e2e_v2v"

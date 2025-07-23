@@ -53,10 +53,6 @@ comm_server:
     api_base: ''
                 
 llm:
-    model_name: 'gpt-4o-mini'
     system_prompt_file: 'MLLMs/system_prompt.txt'
     user_prompt_file: 'MLLMs/user_prompt.txt'
-    # communication: 'without_comm'
-    comm_type: 'refine_based'
-    cons_eval: 1
     

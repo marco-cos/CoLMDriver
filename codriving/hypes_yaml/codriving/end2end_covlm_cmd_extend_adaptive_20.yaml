@@ -91,7 +91,7 @@ data:
 
 
 model:
-  type: "WaypointPlanner_e2e_cmd_attn_fix_20points" #"WaypointPlanner_e2e_cmd"
+  type: "WaypointPlanner_e2e_cmd_attn_fix_20points"
   feature_dir: 128
   # TODO: other hyper-parameters
 

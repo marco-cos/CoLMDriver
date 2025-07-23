@@ -2,7 +2,6 @@ import os
 import copy
 import re
 import io
-import logging
 import json
 import numpy as np
 import torch
@@ -11,36 +10,23 @@ import cv2
 import math
 import datetime
 import pathlib
-import torch.utils.data as data
-from torchvision import transforms
 from PIL import Image
 from skimage.measure import block_reduce
 import time
 from typing import OrderedDict
-import requests
 import shapely
-
 import matplotlib.pyplot as plt
-from team_code.planner import RoutePlanner
 import torch.nn.functional as F
 import pygame
-import queue
 
-import socket
-import struct
-import ast
 from openai import OpenAI
 import base64
 
 from agents.navigation.local_planner import RoadOption
 
 from team_code.v2x_controller import V2X_Controller
-from team_code.eval_utils import turn_traffic_into_bbox_fast
-from team_code.render_v2x import render, render_self_car, render_waypoints
-from team_code.v2x_utils import (generate_relative_heatmap, 
-				generate_heatmap, generate_det_data,
-				get_yaw_angle, boxes_to_corners_3d, get_points_in_rotated_box_3d  # visibility related functions
-				)
+from team_code.render_v2x import render_self_car
+from team_code.v2x_utils import get_yaw_angle, boxes_to_corners_3d, get_points_in_rotated_box_3d
 
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 from opencood.tools import train_utils
@@ -137,70 +123,6 @@ class DisplayInterface(object):
 		pygame.quit()
 
 
-
-class BasePreprocessor(object):
-	"""
-	Basic Lidar pre-processor.
-	Parameters
-	----------
-	preprocess_params : dict
-		The dictionary containing all parameters of the preprocessing.
-	train : bool
-		Train or test mode.
-	"""
-
-	def __init__(self, preprocess_params, train):
-		self.params = preprocess_params
-		self.train = train
-
-
-class SpVoxelPreprocessor(BasePreprocessor):
-	def __init__(self, preprocess_params, train):
-		super(SpVoxelPreprocessor, self).__init__(preprocess_params,
-												train)
-		try:
-			from spconv.utils import VoxelGeneratorV2 as VoxelGenerator
-		except:
-			from spconv.utils import VoxelGenerator
-
-		self.lidar_range = self.params['cav_lidar_range']
-		self.voxel_size = self.params['args']['voxel_size']
-		self.max_points_per_voxel = self.params['args']['max_points_per_voxel']
-
-		if train:
-			self.max_voxels = self.params['args']['max_voxel_train']
-		else:
-			self.max_voxels = self.params['args']['max_voxel_test']
-
-		grid_size = (np.array(self.lidar_range[3:6]) -
-					np.array(self.lidar_range[0:3])) / np.array(self.voxel_size)
-		self.grid_size = np.round(grid_size).astype(np.int64)
-
-		# use sparse conv library to generate voxel
-		self.voxel_generator = VoxelGenerator(
-			voxel_size=self.voxel_size,
-			point_cloud_range=self.lidar_range,
-			max_num_points=self.max_points_per_voxel,
-			max_voxels=self.max_voxels
-		)
-
-	def preprocess(self, pcd_np):
-		data_dict = {}
-		voxel_output = self.voxel_generator.generate(pcd_np)
-		if isinstance(voxel_output, dict):
-			voxels, coordinates, num_points = \
-				voxel_output['voxels'], voxel_output['coordinates'], \
-				voxel_output['num_points_per_voxel']
-		else:
-			voxels, coordinates, num_points = voxel_output
-
-		data_dict['voxel_features'] = voxels
-		data_dict['voxel_coords'] = coordinates
-		data_dict['voxel_num_points'] = num_points
-
-
-		return data_dict
-
 def transform_2d_points(xyz, r1, t1_x, t1_y, r2, t2_x, t2_y):
 	"""
 	Build a rotation matrix and take the dot product.
@@ -210,7 +132,6 @@ def transform_2d_points(xyz, r1, t1_x, t1_y, r2, t2_x, t2_y):
 	xy1[:, 2] = 1
 
 	c, s = np.cos(r1), np.sin(r1)
-	# 顺时针旋转r1角度，r1车辆坐标转换到world frame
 	r1_to_world = np.matrix([[c, -s, t1_x], [s, c, t1_y], [0, 0, 1]])
 
 	# np.dot converts to a matrix, so we explicitly change it back to an array
@@ -219,7 +140,6 @@ def transform_2d_points(xyz, r1, t1_x, t1_y, r2, t2_x, t2_y):
 	c, s = np.cos(r2), np.sin(r2)
 	r2_to_world = np.matrix([[c, -s, t2_x], [s, c, t2_y], [0, 0, 1]])
 	# world frame -> r2 frame
-	# if r1==r2, do nothing
 	world_to_r2 = np.linalg.inv(r2_to_world)
 
 	out = np.asarray(world_to_r2 @ world).T
@@ -229,49 +149,42 @@ def transform_2d_points(xyz, r1, t1_x, t1_y, r2, t2_x, t2_y):
 	return out
 
 def turn_back_into_theta(input):
-	B,K,_,H,W = input.shape
 	output = torch.cat([input[:,:,:2],torch.atan2(input[:,:,2:3], input[:,:,-1:]),input[:,:,3:]],dim=2)
 	assert output.shape[2] == input.shape[2]
 	return output
 
 def turn_traffic_into_map(all_bbox, det_range):
 	data_total = []
-	for idx in range(1):
+	if len(all_bbox) == 0:
+		all_bbox = np.zeros((1,4,2))
 
-		if len(all_bbox) == 0:
-			all_bbox = np.zeros((1,4,2))
-		# plt.cla()
+	fig = plt.figure(figsize=(6, 12), dpi=16)
+	plt.gca().xaxis.set_major_locator(plt.NullLocator())
+	plt.gca().yaxis.set_major_locator(plt.NullLocator())
+	plt.subplots_adjust(top = 1, bottom = 0, right = 1, left = 0, hspace = 0, wspace = 0)
+	plt.margins(0,0)
+	ax = plt.gca()
+	ax.set_facecolor("black")
 
-		fig = plt.figure(figsize=(6, 12), dpi=16)
-		plt.gca().xaxis.set_major_locator(plt.NullLocator())
-		plt.gca().yaxis.set_major_locator(plt.NullLocator())
-		plt.subplots_adjust(top = 1, bottom = 0, right = 1, left = 0, hspace = 0, wspace = 0)
-		plt.margins(0,0)
-		ax = plt.gca()
-		ax.set_facecolor("black")
+	plt.xlim((-det_range[2], det_range[3]))
+	plt.ylim((-det_range[1], det_range[0]))
 
-		plt.xlim((-det_range[2], det_range[3]))
-		plt.ylim((-det_range[1], det_range[0]))
+	for i in range(len(all_bbox)):
+		plt.fill(all_bbox[i,:,0], all_bbox[i,:,1], color = 'white')
 
-		for i in range(len(all_bbox)):
-			plt.fill(all_bbox[i,:,0], all_bbox[i,:,1], color = 'white')
+	# If we haven't already shown or saved the plot, then we need to draw the figure first...
+	fig.canvas.draw()
 
-		# plt.axis('off')
-		# If we haven't already shown or saved the plot, then we need to
-		# draw the figure first...
-		fig.canvas.draw()
-
-		# Now we can save it to a numpy array.
-		data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-		data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-		# H=192, W=96, 3
-		data_total.append(data[:, :, 0])
-		# plt.savefig('/GPFS/public/InterFuser/results/cop3/pnp/multiclass_finetune_fusion_none/test.png')
-		plt.close()
+	# Now we can save it to a numpy array.
+	data = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+	data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+	# H=192, W=96, 3
+	data_total.append(data[:, :, 0])
+	# plt.savefig('/GPFS/public/InterFuser/results/cop3/pnp/multiclass_finetune_fusion_none/test.png')
+	plt.close()
 
 	occ_map = np.stack(data_total, axis=0) # B * T_p, H, W
 	return occ_map
-
 
 
 def x_to_world(pose):
@@ -291,10 +204,6 @@ def x_to_world(pose):
 	"""
 	x, y, roll= pose[:]
 	z = 0
-	yaw = 0
-	pitch = 0
-
-	# used for rotation matrix
 	c_r = np.cos(roll)
 	s_r = np.sin(roll)
 
@@ -333,8 +242,6 @@ def get_pairwise_transformation(pose, max_cav):
 		pairwise_t_matrix[i, j] is Tji, i_to_j
 	"""
 	pairwise_t_matrix = np.tile(np.eye(4), (max_cav, max_cav, 1, 1)) # (L, L, 4, 4)
-
-
 	t_list = []
 
 	# save all transformation matrix in a list in order first.
@@ -347,15 +254,12 @@ def get_pairwise_transformation(pose, max_cav):
 			# identity matrix to self
 			if i != j:
 				# i->j: TiPi=TjPj, Tj^(-1)TiPi = Pj
-				# t_matrix = np.dot(np.linalg.inv(t_list[j]), t_list[i])
 				t_matrix = np.linalg.solve(t_list[j], t_list[i])  # Tjw*Twi = Tji
 				pairwise_t_matrix[i, j] = t_matrix
 
 	return pairwise_t_matrix
 
-def warp_affine_simple(src, M, dsize,
-		align_corners=False):
-
+def warp_affine_simple(src, M, dsize, align_corners=False):
 	B, C, H, W = src.size()
 	grid = F.affine_grid(M,
 						[B, C, dsize[0], dsize[1]],
@@ -381,9 +285,7 @@ def warp_image(det_pose, occ_map):
 
 		t_matrix = torch.from_numpy(pairwise_t_matrix[:T, :T, :, :])
 		
-		neighbor_feature = warp_affine_simple(occ_map[b],
-										t_matrix[-1, :, :, :],
-										(H, W))
+		neighbor_feature = warp_affine_simple(occ_map[b], t_matrix[-1, :, :, :], (H, W))
 		occ_fused.append(neighbor_feature)
 	
 	return torch.stack(occ_fused)
@@ -397,58 +299,26 @@ command_dict = {-1: "no command",
 				 6:'right lane change'}
 
 class VLM_Client:
-	def __init__(self, url='http://192.168.28.131:51415/v1'):
+	def __init__(self, url):
 		self.client = OpenAI(
 			api_key='EMPTY',
 			base_url=url
 		)
 		self.model_name = self.client.models.list().data[0].id
 	
-	def edit_prompt(self, prompt, measurements, comm, perception,det_type):
+	def edit_prompt(self, prompt, measurements, comm, perception, det_type):
 		speed = measurements['speed']
 		command = int(measurements['command'])
 		if command in command_dict.keys():
 			command_str = command_dict[command]
 		else:
 			command_str = 'no command'
-		prompt = prompt.replace("-nvins-", command_str)
-		prompt = prompt.replace("-speed-", "{:.2f}".format(speed))
+
 		if comm != None:
-			# prompt = prompt.replace("m/s", "m/s, 'communication decision': [" + comm['nav'] + '][' + comm['speed'] + ']')
-			# prompt = prompt.replace("No interaction now", comm['nav'] + ', ' + comm['speed'])
 			prompt = prompt.replace("No interaction now", comm['speed'])
 			print('comm:',comm['nav'] + ', ' + comm['speed'])
 		print('speed:',"{:.2f}".format(speed))
 		
-		# add perception
-		# car, bicycle, people = [], [], []
-		# for actor, actor_loc in perception.items():
-		# 	act = []
-		# 	for loc in actor_loc:
-		# 		if loc[0] < -6 or loc[0] > 6 or loc[1] < -12 or loc[1] > 36:
-		# 			continue
-		# 		act.append([-loc[0], loc[1]])
-		# 	if actor==0:
-		# 		car = act
-		# 	elif actor==1:
-		# 		bicycle = act
-		# 	elif actor==2:
-		# 		people = act
-		# perception_str = 'Perceived Car: [-car-]\nPerceived Bicycle: [-bicycle-]\nPerceived People: [-people-]'
-		# # perception_str = f'There are {len(car)} car and {len(people)} people near the front of the car.'
-		# car_str = ''
-		# for i, p in enumerate(car):
-		#     car_str = car_str + f'{round(p[0], 2)}, {round(p[1], 2)}; '
-		# perception_str = perception_str.replace('-car-', car_str.rstrip('; '))
-		# bicycle_str = ''
-		# for i, p in enumerate(bicycle):
-		#     bicycle_str = bicycle_str + f'{round(p[0], 2)}, {round(p[1], 2)}; '
-		# perception_str = perception_str.replace('-bicycle-', bicycle_str.rstrip('; '))
-		# people_str = ''
-		# for i, p in enumerate(people):
-		#     people_str = people_str + f'{round(p[0], 2)}, {round(p[1], 2)}; '
-		# perception_str = perception_str.replace('-people-', people_str.rstrip('; '))
-
 		perc = [[], [], []]
 		for actor, actor_loc in perception.items():
 			for loc in actor_loc:
@@ -470,9 +340,13 @@ class VLM_Client:
 					else: fb = 'backward'
 					perception_str = perception_str + f'{veh_type} {i+1}, {abs(int(p[1]))} meters {fb} and {abs(int(p[0]))} meters to the {lr};\n'
 
-		prompt = prompt.replace('-pr-', perception_str)
-		# prompt = prompt.replace('\n### Perception Results\n-pr-', '')
-		# print(prompt, '\n\n')
+		prompt_dic = {
+			"nvins": command_str,
+			"speed": "{:.2f}".format(speed),
+			"pr": perception_str
+		}
+		prompt = prompt.format(**prompt_dic)
+
 		return prompt
 
 	def infer(self, front_img, system_prompt):
@@ -481,7 +355,7 @@ class VLM_Client:
 		pil_image.save(buffered, format="JPEG")
 		image_bytes = base64.b64encode(buffered.getvalue()).decode('utf-8')
 
-		# t = time.time()
+		t = time.time()
 		response = self.client.chat.completions.create(
 			model=self.model_name,
 			messages=[
@@ -504,10 +378,10 @@ class VLM_Client:
 			max_tokens=4,
 			)
 		content = response.choices[0].message.content
-		return content, 0.67 
+		return content, time.time()-t
 
 class Comm_Client:
-	def __init__(self, url='http://192.168.28.131:7415/v1',ego_num=1, api_key='', api_base=''):
+	def __init__(self, url, api_key='', api_base=''):
 		if api_key!='':
 			self.client = OpenAI(
 				api_key=api_key,
@@ -522,16 +396,11 @@ class Comm_Client:
 			self.model_name = self.client.models.list().data[0].id
 		print("Comm_Client", self.model_name)
 		self.nav_int_list = ['follow the lane', 'left lane change', 'right lane change', 'go straight at intersection', 'turn left at intersection', 'turn right at intersection']
-		# self.speed_int_list = ['normal speed', 'high speed', 'low speed', 'stop']
 		self.speed_int_list = ['STOP', 'SLOWER', 'FASTER', 'KEEP']
-		self.order = 0
-		self.start_comm_step = -1
-		self.his_nego_message = {0:'None',1:'None'}
 		self.cons_anly = 'None'
-		self.ego_num = ego_num
 	
 	def send_message(self, prompt, max_tokens=256, return_time=False):
-		# t = time.time()
+		t = time.time()
 		while True:
 			try:
 				response = self.client.chat.completions.create(
@@ -553,12 +422,8 @@ class Comm_Client:
 			except Exception as e:
 				print('error: ', e)
 		resp = response.choices[0].message.content
-		output_token_num = response.usage.completion_tokens
-		print(resp)
-		print("output tokens:", output_token_num)
-		output_speed = 123.15 
-		llm_infer_time = output_token_num / output_speed
-		print('time comsume: ', llm_infer_time, '\n')
+		llm_infer_time = time.time()-t
+		# print('time comsume: ', llm_infer_time, '\n')
 		if return_time:
 			return resp, llm_infer_time
 		else:
@@ -578,18 +443,17 @@ class Comm_Client:
 		direction, heading: the direction and heading of vehicle 0 in the perspective of vehicle 1
 		'''		
 
-		# 计算两车之间的相对位置
+		# cal relative position
 		theta0 = self.normalize_angle(-theta0)
 		theta1 = self.normalize_angle(-theta1)
 		dx = x1 - x0
 		dy = y0 - y1
-		# 转换到对车的局部坐标系
+		# trans to local coordinate system
 		dx_local = dx * math.cos(theta1-math.pi) + dy * math.sin(theta1-math.pi)
 		dy_local = -dx * math.sin(theta1-math.pi) + dy * math.cos(theta1-math.pi)
 		
-		# 计算本车相对于对车的角度
+		# cal relative angle
 		relative_angle = self.normalize_angle(math.atan2(dx_local, dy_local))
-		# 根据角度差异判断方位
 		if -math.pi / 8 <= relative_angle <= math.pi / 8:
 			direction = 'front'
 		elif math.pi / 8 < relative_angle <= 3 * math.pi / 8:
@@ -609,7 +473,7 @@ class Comm_Client:
 		elif -3 * math.pi / 8 <= relative_angle < - math.pi / 8:
 			direction = 'left front'
 
-		# 计算heading
+		# cal heading
 		angle_diff = self.normalize_angle(theta1 - theta0)
 		if -math.pi / 4 <= angle_diff <= math.pi / 4:
 			heading = 'forward'
@@ -630,73 +494,12 @@ class Comm_Client:
 			angle += 2 * math.pi
 		return angle
 
-	def extract_measurements(self, pair, car_data_raw, dir_inten_veh, speed_inten_veh, step):
-		'''
-		Given a pair of vehicle ID, generate communication order and relative poses
-
-		Parameters
-		----------
-		pair: two vehicle IDs [id_0, id_1]
-		car_data_raw: vehicle states/information/sensor data
-		dir_inten_veh: the latest driving direction intention of the vehicles
-		speed_inten_veh: the latest driving speed intention of the vehicles
-		step: global step of simulation
-	
-		Returns
-		-------
-		comm_info_list: list, [the relative pose of vehicle id_1 in vehicle id_0's view, the relative pose of vehicle id_0 in vehicle id_1's view]
-		self.order: 0 means the id_0 vehicle starts conversation, and 1 means id_1
-		'''
-		id_0, id_1 = pair
-		measurements_0, measurements_1 = car_data_raw[id_0]['measurements'], car_data_raw[id_1]['measurements']
-		intention_list = []
-		for speed_inten, dir_inten in zip(speed_inten_veh, dir_inten_veh):
-			if 'STOP' in speed_inten or 'SLOWER' in speed_inten:
-				intention_list.append('stop')
-			else:
-				intention_list.append(dir_inten)
-		distance = math.sqrt((measurements_0['x'] - measurements_1['x']) ** 2 + (measurements_0['y'] - measurements_1['y']) ** 2)
-
-		if distance > 20:
-			return None, self.order
-
-		if self.start_comm_step == -1:
-			self.start_comm_step = step
-
-		if (step - self.start_comm_step) % 100 == 0: # 5s一次重置顺序
-			if intention_list[0]!='stop' and intention_list[1]!='stop':
-				if intention_list[0] == 'go straight at intersection' and intention_list[1] != 'go straight at intersection':
-					self.order=0
-				elif intention_list[1] == 'go straight at intersection' and intention_list[0] != 'go straight at intersection':
-					self.order=1
-				elif intention_list[0] == 'follow the lane' and intention_list[1] != 'follow the lane':
-					self.order=0
-				elif intention_list[1] == 'follow the lane' and intention_list[0] != 'follow the lane':
-					self.order=1
-				elif intention_list[0] == 'follow the lane' and intention_list[1] == 'follow the lane':
-					self.order=0
-				else:
-					self.order=0
-			elif intention_list[0]=='stop':
-				self.order=1
-			elif intention_list[1]=='stop':
-				self.order=0
-			else:
-				self.order=0 if self.order==1 else 1
-
-		comm_info_list = []
-		direction, heading = self.judge_direction(measurements_0['x'], measurements_0['y'], measurements_0['theta'], measurements_1['x'], measurements_1['y'], measurements_1['theta'])
-		comm_info_list.append({'ego_id': id_0, 'direction': direction, 'distance': distance, 'heading': heading, 'speed': measurements_0['speed'], 'intention': intention_list[0], 'rec_id': id_1, 'rec_speed': measurements_1['speed'], 'rec_intention': intention_list[1]})
-		direction, heading = self.judge_direction(measurements_1['x'], measurements_1['y'], measurements_1['theta'], measurements_0['x'], measurements_0['y'], measurements_0['theta'])
-		comm_info_list.append({'ego_id': id_1, 'direction': direction, 'distance': distance, 'heading': heading, 'speed': measurements_1['speed'], 'intention': intention_list[1], 'rec_id': id_0, 'rec_speed': measurements_0['speed'], 'rec_intention': intention_list[0]})
-		return comm_info_list, self.order
-
 	def form_nego_order(self, group, car_data_raw, dir_inten_veh, speed_inten_veh, step):
 		dis_metric = []
 		comm_info_list = []
 		for car_id in group:
 			intention_dict = {}
-			for i, (speed_inten, dir_inten) in enumerate(zip(speed_inten_veh, dir_inten_veh)):
+			for i, dir_inten in enumerate(dir_inten_veh):
 				intention = dir_inten
 
 				if car_id==i:
@@ -732,90 +535,7 @@ class Comm_Client:
 
 		return comm_info_list, dis_order
 
-	def propose(self, comm_info_list, car_id, last_proposal):
-		for comm_dict in comm_info_list:
-			if comm_dict['ego_id'] == car_id:
-				info = comm_dict
-				break
-		veh_string = ''
-		for i in range(len(info['other_direction'])):
-			veh_string += f'Vehicle (ID: {list(info["other_direction"].keys())[i]}): {round(list(info["other_distance"].values())[i], 1)} meters at your {list(info["other_direction"].values())[i]}, heading {list(info["other_heading"].values())[i]}, at a speed of {round(list(info["other_speed"].values())[i])} m/s, and its driving intention is {list(info["other_intention"].values())[i]}.\n'
-
-		prompt = f'''Given the following scenario where multiple vehicles are in conflict:
-
-- Ego Vehicle (ID: {info['ego_id']}): Intention = {info['ego_intention']}, Speed = {round(info['ego_speed'], 1)}m/s
-- Surrounding Vehicles:
-{veh_string}
-
-Based on this information, analyze the situation considering the speed, direction, distance, and intention of each vehicle. Identify any potential conflicts and propose actions that ensure the safety and efficiency of all vehicles involved. Consider the continuity of the last action.
-
-Output Format:
-Conflict analysis: Brief reasoning for conflict
-Veh i: Proposed action
-Veh j: Proposed action
-...
-
-Ensure your proposal addresses the conflicts identified and prioritizes safe and efficient movement for all vehicles.
-Only output results and as short as possible.'''
-		message = self.send_message(prompt)
-		return message
-
-	def thinking(self, comm_info_list, car_id, local_comm_content, last_proposal, suggestion):
-		for comm_dict in comm_info_list:
-			if comm_dict['ego_id'] == car_id:
-				info = comm_dict
-				break
-
-		veh_string = ''
-		for i in range(len(info['other_direction'])):
-			veh_string += f'Vehicle (ID: {list(info["other_direction"].keys())[i]}): {round(list(info["other_distance"].values())[i], 1)} meters at your {list(info["other_direction"].values())[i]}, heading {list(info["other_heading"].values())[i]}, at a speed of {round(list(info["other_speed"].values())[i])} m/s, and its driving intention is {list(info["other_intention"].values())[i]}.\n'
-
-		previous_conv = ''
-		for item in local_comm_content: # {'id': car_id, 'type': 'propose', 'message': proposal}
-			previous_conv += f"Vehicle {item['id']}: '{item['message']}'"
-
-		if suggestion=='':
-			sug_str = ''
-		else:
-			sug_str = f"- Critic's suggestion for negotiation: \n{suggestion}"
-
-		prompt = f'''Given the following scenario where multiple vehicles are in conflict, you are given a proposal to solve the conflict, and you need to determine whether to agree with the proposal. If agree, output agree to boost negotiation efficiency; if disagree, give new proposal and explain the reason.
-
-- Ego Vehicle (ID: {info['ego_id']}): Intention = {info['ego_intention']}, Speed = {round(info['ego_speed'], 1)}m/s
-- Surrounding Vehicles:
-{veh_string}
-- Previous Conversation: 
-{previous_conv}
-{sug_str}
-
-Based on these information, analyze the situation considering the speed, direction, distance, and intention of each vehicle. Judge if the proposal ensure the safety and efficiency of all vehicles involved, and consider the continuity of the last action. 
-The critic's suggestions provide reference for negotiation quality, and it is important to revise according to the suggestions.
-
-If disagree, generate a new proposal base on the situation, last action and critic's suggestion, and explain your reason.
-
-Output Format:
-Disagree.
-Reason: Short explain of why disagree
-Veh i: Proposed action
-Veh j: Proposed action
-...
-
-If the proposal is safe and efficieent, output agree.
-
-Output Format:
-Agree.
-
-Output as short as possible.
-Agree if the proposal is acceptable!'''
-		message = self.send_message(prompt)
-
-		if 'Agree' in message: agree_flag = True
-		else: agree_flag = False
-
-		return message, agree_flag
-		
 	def comm(self, comm_info_list, car_id, local_comm_content, suggestion):
-		# t = time.time()
 		for comm_dict in comm_info_list:
 			if comm_dict['ego_id'] == car_id:
 				info = comm_dict
@@ -859,35 +579,11 @@ Based on the information, analyze the situation considering the speed, direction
 
 **Only output the message!**
 You are Vehicle {info['ego_id']}, the message you want to negotiate with other cars is:'''
-		# print(prompt)
 		message, llm_infer_time = self.send_message(prompt, return_time=True)
 
 		return message, llm_infer_time
 
-	def sum_action_proposal(self, max_agreement_proposal):
-		prompt = '''Given driving proposals, classify each vehicle's speed change into [STOP, SLOWER, KEEP, FASTER] and output the result as a string in format: {'id': car_id, 'speed': category}.
-
-Classification rules:
-- **STOP**: Come to a complete stop.
-- **SLOWER**: Decrease speed.
-- **KEEP**: Maintain current speed.
-- **FASTER**: Increase speed.
-
-Output example:
-{"0": {"speed": "STOP"}, "2":{"speed": "SLOWER"}}
-
-Input proposal:
-ppp
-
-Your task is to analyze the given proposals for each vehicle and output the classification as a string in the specified format. Ensure the output matches the required structure exactly.'''
-		prompt = prompt.replace('ppp', max_agreement_proposal)
-		message = self.send_message(prompt)
-		action_list = json.loads(message)
-	
-		return action_list
-
 	def sum_action(self, comm_content):
-		# t = time.time()
 		prompt = '''**Task**
 Given a conversation of multiple cars negotiating to reach consensus, classify each vehicle's speed change into [STOP, SLOWER, KEEP, FASTER] and output the result as a string in format: {'id': car_id, 'speed': category}.
 
@@ -916,201 +612,6 @@ Your task is to analyze the given conversations for each vehicle and output the 
 	
 		return action_list, sum_action_time
 
-	def sender_1(self, comm_dict):
-# 		prompt = f'''**You are an communication assistant on an autonomous vehicle.**
-
-# ### Instructions
-# The vehicles on the road are equipped with collaborative driving systems, allowing you to enhance your driving skills and avoid traffic accidents by communicating driving intentions. Your task is to communicate driving intentions with surrounding vehicles. At the current moment, you need to send a message to another car, informing them of your current driving intention and reminding them to pay attention to the car. 
-
-# ### Current State
-# Your ID is {comm_dict['ego_id']}, at the {comm_dict['direction']} {int(comm_dict['distance'])} meters away to the opposite vehicle and heading {comm_dict['heading']}, speed is {int(comm_dict['speed'])}m/s, with the intention of {comm_dict['intention']}.
-
-# Only output the message you generated. The message you will send is: '''
-		# message = self.send_message(prompt)
-		message = f'''The relative driving states of vehicle with ID {comm_dict['ego_id']}: it is at the {comm_dict['direction']} {str(int(comm_dict['distance']))} meters away from you, heading to your {comm_dict['heading']} , with the speed of {str(int(comm_dict['speed']))} m/s, and its driving intention is {comm_dict['intention']}.''' # Please pay attention to me. If there is any conflict, please slow down or stop to yield!
-		return message
-
-	def sender_1_irregular(self, comm_dict):
-		prompt = f'''**You are an communication assistant on an autonomous vehicle.**
-
-### Instructions
-The vehicles on the road are equipped with collaborative driving systems, allowing you to enhance your driving skills and avoid traffic accidents by communicating driving intentions. Your task is to communicate driving intentions with surrounding vehicles. At the current moment, you need to send a message to another car, informing them of your current driving intention and reminding them to pay attention to the car. 
-
-### Current State
-Your ID is {comm_dict['ego_id']}, at the {comm_dict['direction']} {int(comm_dict['distance'])} meters away to the opposite vehicle and heading {comm_dict['heading']}, speed is {int(comm_dict['speed'])}m/s, with the intention of {comm_dict['intention']}.
-
-Only output the message you generated. The message you will send is: '''
-		message = self.send_message(prompt)
-		# message = 'Hello! I am at the ' + comm_dict['direction'] + ' ' + str(int(comm_dict['distance'])) + ' meters away from you, heading ' + comm_dict['heading'] + ', with the speed of ' + str(int(comm_dict['speed'])) + 'm/s, and my driving intention is ' + comm_dict['intention'] + '. Please pay attention to me. If there is any conflict, please slow down or stop to yield!'
-		return message
-
-	def receiver_1(self, info_others, comm_dict, dialog_record, current_step):
-		# find messages in latest 2 steps
-		id = comm_dict['rec_id']
-		steps_in_dialog = sorted(list(dialog_record.keys()))
-		latest_steps = [step for step in steps_in_dialog if step > current_step-10]
-		if len(latest_steps) > 2:
-			latest_steps = latest_steps[-2:]
-		latest_negotiation = ''
-		for sender_id in range(self.ego_num):
-			if sender_id == id:
-				continue
-			found = False
-			for i in range(len(latest_steps)):
-				for message in dialog_record[latest_steps[-i-1]]:
-					if message[0]==sender_id and message[1]==id:
-						latest_negotiation += f'negotiation message from vehicle of ID {sender_id}:{message[2]}'+ '\n'
-						found = True
-						break
-				if found:
-					break
-
-		prompt = \
-f'''You are an communication and driving assistant on an autonomous vehicle, and you will receive message and information from other communicative vehicles.
-You have the following information:
-
-1. Driving rules:
-- Stop if there will be a collision few seconds later.
-- Slow down if there will be a conflict or getting close to the other vehicle.
-- Keep speed if there is no conflict or collision, and is at safe distance.
-
-2. The current driving state of your vehicle:
-Your ID is {comm_dict['rec_id']}, speed is {int(comm_dict['rec_speed'])}m/s, with the intention of {comm_dict['rec_intention']}.
-
-3. The message containing the current driving states from other communicative vehicles:
-{info_others}
-
-4. The latest negotiation messages from other communicative vehicles:
-{latest_negotiation}
-
-5. The consensus analysis, which describes the degree of consensus between you and the vehicle of ID {comm_dict['ego_id']}:
-"{self.cons_anly}"
-
-### Output rules
-1. Briefly analyse the situation according to these pieces of information, evaluate potential collision risks, and consider slow down or stop if there is conflict, consider keep speed or accelerate if the risk is minor or under control. Analysis should be conclude in one sentence.
-2. Provide intentions in the format [navigation intention][speed intention], don't forget to add the square brackets. The navigation intention should be chosen from [follow the lane, left lane change, right lane change, go straight at intersection, turn left at intersection, turn right at intersection] and the speed intention should be chosen from [STOP, SLOWER, KEEP, FASTER].
-3. Generate a brief response to the message sender vehicle {comm_dict['ego_id']}, express your driving intention and driving suggestion to the other vehicle. Some output references: 1) I will stop to yield, you can go faster. 2) I will slow down to yield, you can go faster. 3) I think there is no conflict, so I will keep speed, please pay attention. 3) I am too fast to slow down, driving fast, you better slow down and pay attention! Adjust the content according to your own situation.
-
-Output in format:
-Brief analysis: [do brief analysis according to the first point of output rules]
-Intention: [navigation intention] [speed intention]
-Response to vehicle of ID {comm_dict['ego_id']}: [response message]
-
-Output as short as possible!
-Let's think step by step.
-'''
-		output = self.send_message(prompt)
-
-		analysis = output.split('Brief analysis:')[1].split('\n')[0]
-		intention = output.split('Intention:')[1].split('\n')[0]
-		response_message = output.split(f'''Response to vehicle of ID {comm_dict['ego_id']}:''')[1]
-
-		suggest_nav, suggest_speed = 'None', 'None'
-		for nav in self.nav_int_list:
-			if nav in intention:
-				suggest_nav = nav
-		for speed in self.speed_int_list:
-			if speed in intention:
-				suggest_speed = speed
-
-		return suggest_nav, suggest_speed, response_message, output
-
-	def receiver_1_irregular(self, message, comm_dict):
-		prompt = f'''You are an communication and driving assistant on an autonomous vehicle.Your task is to receive driving intentions from surrounding vehicles and analysis if there is any conflict with yourself, then inform the collaborator vehicle of the analysis and negotiation suggestion for driving safety.
-
-### Driving rules
-1. Stop if there will be a collision few seconds later.
-2. Slow down if there will be a conflict or getting close to the other vehicle.
-3. Keep speed if there is no conflict or collision, and is at safe distance.
-
-### Example of output:
-"Analysis:
-Intention:
-Negotiation response message:"
-
-### intention
-The navigation intention is chosen from [follow the lane; left lane change; right lane change; go straight at intersection; turn left at intersection; turn right at intersection] and the speed intention is chosen from [STOP, SLOWER, KEEP, FASTER].
-
-### Current State
-Your ID is {comm_dict['rec_id']}, speed is {int(comm_dict['rec_speed'])}m/s, with the intention of {comm_dict['rec_intention']}.
-
-### Received message from another car
-"{message}"
-
-Output as short as impossible!'''
-		message = self.send_message(prompt)
-		suggest_nav, suggest_speed = 'None', 'None'
-		for nav in self.nav_int_list:
-			if nav in message:
-				suggest_nav = nav
-		for speed in self.speed_int_list:
-			if speed in message:
-				suggest_speed = speed
-
-		if suggest_speed=='STOP':
-			response_message = 'Hi, I will stop to yield. You can go faster.'
-		elif suggest_speed=='SLOWER':
-			response_message = 'Hi, I will slow down to yield. You can go faster.'
-		elif suggest_speed=='KEEP':
-			response_message = 'Hello, I think there is no conflict, so I will keep speed, please pay attention.'
-		elif suggest_speed=='FASTER':
-			response_message = 'Sorry, I am too fast to slow down, driving fast. You better slow down and pay attention!'
-
-		return suggest_nav, suggest_speed, message # response_message
-
-	def receiver_2(self, message, comm_dict):
-		prompt = f'''You are an communication and driving assistant on an autonomous vehicle. Your have send a message to another car, informing them of your current driving intention and reminding them to pay attention to the car. Now, you receive the message back from him, you need to decide whether to change your intention based on the message and current state.
-The consensus analysis should be considered if it's not None.
-
-### Example of output:
-"[speed intention]"
-
-### intention
-The speed intention is chosen from [STOP, SLOWER, KEEP, FASTER].
-
-### Current State
-Your ID is {comm_dict['ego_id']}, speed is {int(comm_dict['speed'])}m/s, with the intention of {comm_dict['intention']}.
-
-### Received message from another car
-"{message}"
-
-### Consensus analysis
-"{self.cons_anly}"
-
-Output as short as impossible!'''
-# [normal speed; high speed; low speed; stop]
-		message = self.send_message(prompt)
-		suggest_speed = 'None'
-		for speed in self.speed_int_list:
-			if speed in message:
-				suggest_speed = speed
-
-		return suggest_speed, message
-
-	def receiver_2_irregular(self, message, comm_dict):
-		prompt = f'''You are an communication and driving assistant on an autonomous vehicle. Your have send a message to another car, informing them of your current driving intention and reminding them to pay attention to the car. Now, you receive the message back from him, you need to decide whether to change your intention based on the message and current state.
-
-### Example of output:
-"[speed intention]"
-
-### intention
-The speed intention is chosen from [STOP, SLOWER, KEEP, FASTER].
-
-### Current State
-Your ID is {comm_dict['ego_id']}, speed is {int(comm_dict['speed'])}m/s, with the intention of {comm_dict['intention']}.
-
-### Received message from another car
-"{message}"
-
-Output as short as impossible!'''
-# [normal speed; high speed; low speed; stop]
-		message = self.send_message(prompt)
-		suggest_speed = 'None'
-		for speed in self.speed_int_list:
-			if speed in message:
-				suggest_speed = speed
-
-		return suggest_speed
 
 class Nego_Client:
 	def __init__(self, url, api_key, api_base):
@@ -1127,11 +628,6 @@ class Nego_Client:
 			)
 			self.model_name = self.client.models.list().data[0].id
 		print("Nego_Client:", self.model_name)
-		# self.headers = {
-		# "Content-Type": "application/json",
-		# "Authorization": f"Bearer {api_key}"
-		# }
-		
 		self.nego_content = {}
 		self.nego_content['action'] = {}
 		self.current_step = -1
@@ -1160,7 +656,7 @@ class Nego_Client:
 				print('error: ', e)
 		resp = response.choices[0].message.content
 		print(resp)
-		print('time comsume: ', time.time()-t, '\n')
+		# print('time comsume: ', time.time()-t, '\n')
 
 		return resp
 
@@ -1187,40 +683,9 @@ Your output format:
 Short analysis: very short sentence to sum the consensus situation of the conversation.
 Consensus score: int'''
 		prompt = prompt.replace('-conv-', conv_str)
-		# print(prompt)
 		resp = self.send_message(prompt)
 
 		pattern = r'Consensus score: (\d+)'
-		match = re.search(pattern, resp)
-		if match:
-			score = float(match.group(1))/100
-		else:
-			score = 0
-		return score
-
-	def llm_align_score(self, driving_style, current_intention):
-		prompt = '''Task Description:
-Given a driving style and a current intention, please evaluate the degree to which the current intention aligns with the driving style. Your response should include two parts: the first part is a brief explanation of the alignment; the second part is a score indicating the degree of alignment, ranging from 0 to 100, where 0 means no alignment (the current intention is completely different from the core intention), and 100 means complete alignment (the current intention is fully aligned with the core intention).
-
-Scoring Criteria:
-0-30: The current intention completely disobeys the driving style. There is a significant misalignment, and the goals or actions are in direct opposition to what the core intention aims to achieve.
-31-70: The current intention shows moderate alignment. While some aspects remain consistent with the driving style, others are moving in a different direction. This indicates a mixed level of agreement and deviation.
-71-100: The current intention is highly aligned with the driving style, with only minor or negligible differences. The goals and actions are almost perfectly in line with what the driving style aims to achieve.
-
-Driving Style:
--style-
-
-Current Intention:
--curint-
-
-Your output format:
-Analysis: 
-Alignment score: int'''
-		prompt = prompt.replace('-style-', driving_style)
-		prompt = prompt.replace('-curint-', current_intention)
-		resp = self.send_message(prompt)
-
-		pattern = r'Alignment score: (\d+)'
 		match = re.search(pattern, resp)
 		if match:
 			score = float(match.group(1))/100
@@ -1238,7 +703,7 @@ Alignment score: int'''
 				min_distance = distance
 				min_point = i
 		print('min_distance:', min_distance, 'min_point:', min_point)
-		print('waypoints:', waypoints1[0], waypoints1[-1], waypoints2[0], waypoints2[-1])
+		# print('waypoints:', waypoints1[0], waypoints1[-1], waypoints2[0], waypoints2[-1])
 		return min_distance, 1 / (1 + np.exp(-2 * (min_distance - 3))), min_point*4
 
 	def efficiency_score(self, waypoints):
@@ -1257,59 +722,12 @@ Alignment score: int'''
 			score = avg_speed / 8
 		return score
 
-	def cal_nego_score(self, comm_results, conversation, waypoints, main_path, step, nego_num):
-		'''
-		Given the communication contents and decisions made by vehicles, calculate the consensus/safety/efficiency score of cooperative driving
-
-		Parameters
-		----------
-		comm_results : the driving intention of each vehicle after negotiation
-		conversation : the complete negotiation process
-		waypoints: the waypoints planned with driving intention
-		main_path : a path to store intermediate results
-		step : the global simulation step
-		nego_num : times of negotiation at this single step
-	
-		Returns
-		-------
-		total_score : total score of cooperative driving
-		'''
-
-		if len(conversation[step])==0:
-			cons_score = 0
-		else:
-			cons_score = self.llm_cons_score(conversation[step],comm_results)
-		min_distance, safety_score = self.safety_score(waypoints[0], waypoints[1])
-		efficiency_score = self.efficiency_score(waypoints)
-
-		print('cons_score:', cons_score, ' safety_score:', safety_score, ' efficiency_score:', efficiency_score)
-		total_score = 2*cons_score + 2*safety_score + efficiency_score
-		print('total_score:', total_score, '\n')
-
-		self.nego_content[step] = {}
-		self.nego_content[step]['cons_score'] = cons_score
-		self.nego_content[step]['safety_score'] = safety_score
-		self.nego_content[step]['efficiency_score'] = efficiency_score
-		self.nego_content[step]['total_score'] = total_score
-		self.nego_content[step]['content'] = conversation[step]
-		self.nego_content[step]['min_distance'] = min_distance
-		self.nego_content[step]['waypoints'] = [w.tolist() for w in waypoints]
-
-		self.plot_and_save_waypoints(waypoints, main_path / pathlib.Path(f'waypoints/{step}_{nego_num}_{total_score}.png'))
-		self.current_step = step
-
-		return total_score
-
 	def evaluator(self, comm_results, local_comm_content, waypoints, main_path, step):
 		'''
 		comm_results: {car_id: {'nav': 'follow the lane', 'speed': 'KEEP'}, ...}
 		conversation: {step: [[sender_id, receiver_id, message], ...], ...}
 		'''
-		# print(' conversation:', local_comm_content)
-		# t = time.time()
 		cons_score = self.llm_cons_score(local_comm_content)
-		# print('cons_score:', cons_score)
-
 		efficiency_score = self.efficiency_score(waypoints)
 		print('efficiency_score:', round(efficiency_score, 2))
 
@@ -1328,8 +746,6 @@ Alignment score: int'''
 
 		# suggestion
 		suggestion = ''
-		# if cons_score < 0.8:
-		# 	suggestion+='Consensus issue: The consensus has not been reached, please try to communicate more and reach an agreement.\n'
 		for i in range(len(safety_score_list)):
 			if safety_score_list[i] < 0.7:
 				suggestion+=f'Safety issue: Vehicle {safety_id_list[i][0]} and vehicle {safety_id_list[i][1]} may have conflict. Suggest one of them to yeild, and another go pass faster.\n'
@@ -1350,20 +766,17 @@ Alignment score: int'''
 		self.nego_content[step][id_str]['content'] = local_comm_content
 		self.nego_content[step][id_str]['suggestion'] = suggestion
 		self.nego_content[step][id_str]['min_distance'] = min_distance
-		# self.nego_content[step]['waypoints'] = [w.tolist() for w in waypoints]
 
 		self.plot_and_save_waypoints(waypoints, main_path / pathlib.Path(f'waypoints/{step}_{total_score}.png'))
 
 		return total_score, suggestion, [cons_score, min(safety_score_list), efficiency_score]
 	
-	def plot_and_save_waypoints(self, pred_waypoints, save_path):
-		mid_point = pred_waypoints[0][0]
-		
+	def plot_and_save_waypoints(self, pred_waypoints, save_path):		
 		x_coords = []
 		y_coords = []
 		for waypoints in pred_waypoints:
-			x_values = [point[0] for point in waypoints]  # 提取x坐标
-			y_values = [point[1] for point in waypoints]  # 提取y坐标
+			x_values = [point[0] for point in waypoints]
+			y_values = [point[1] for point in waypoints]
 			x_coords.append(x_values)
 			y_coords.append(y_values)
 
@@ -1380,7 +793,6 @@ Alignment score: int'''
 		x_min, x_max = min(all_x), max(all_x)
 		y_min, y_max = min(all_y), max(all_y)
 		
-		# 计算边界时考虑全部点的最大范围
 		max_range = max(x_max - x_min, y_max - y_min)
 		x_center = (x_max + x_min) / 2
 		y_center = (y_max + y_min) / 2
@@ -1392,7 +804,8 @@ Alignment score: int'''
 		plt.grid(True)
 		os.makedirs(os.path.dirname(save_path), exist_ok=True)
 		plt.savefig(save_path)
-		plt.close()  # 关闭图形以释放内存
+		plt.close()
+
 
 class PnP_infer():
 	def __init__(self, config=None, ego_vehicles_num=1, perception_model=None, planning_model=None, perception_dataloader=None, device=None) -> None:
@@ -1400,24 +813,9 @@ class PnP_infer():
 		self._hic = DisplayInterface()
 		self.ego_vehicles_num = ego_vehicles_num
 
-		self.memory_measurements = [[], [], [], [], []]
-		self.memory_actors_data = [[], [], [], [], []]
 		self.det_range = [36, 12, 12, 12, 0.25]
 		self.max_distance = 36
 		self.distance_to_map_center = (self.det_range[0]+self.det_range[1])/2-self.det_range[1]
-
-		#### Voxelization Process
-		voxel_args = {
-			'args': {
-				'voxel_size': [0.125, 0.125, 4], # 
-				'max_points_per_voxel': 32,
-				'max_voxel_train': 70000,
-				'max_voxel_test': 40000
-			},
-			'cav_lidar_range': [-12, -36, -22, 12, 12, 14]   # x_min, y_min, z_min, x_max, y_max, z_max
-		}
-		self.voxel_preprocess = SpVoxelPreprocessor(voxel_args, train=False)
-	
 
 		self.perception_model = perception_model
 		self.planning_model = planning_model
@@ -1437,8 +835,8 @@ class PnP_infer():
 		self.prev_lidar = []
 		self.prev_control = {}
 		self.prev_surround_map = {}
-
 		self.pre_raw_data_bank = {}
+
 		############
 		###### multi-agent related components
 		############
@@ -1455,9 +853,7 @@ class PnP_infer():
 					(now.month, now.day, now.hour, now.minute, now.second),
 				)
 			)
-
 			print(string)
-
 			self.save_path = pathlib.Path(SAVE_PATH) / string
 			self.save_path.mkdir(parents=True, exist_ok=False)
 			(self.save_path / "meta").mkdir(parents=True, exist_ok=False)
@@ -1467,17 +863,16 @@ class PnP_infer():
 		self.total_time_cost = 0
 		self.total_infer_step = 0
 
-		self.comm_client = Comm_Client(url=self.config['comm_server']['comm_client'],ego_num=self.ego_vehicles_num, api_key=self.config['comm_server']['api_key'], api_base=self.config['comm_server']['api_base']) # 'http://192.168.28.126:1416/v1'
-		self.vlm_client = VLM_Client(url=self.config['comm_server']['vlm_client']) # 'http://192.168.28.126:1415/v1'
-		self.nego_client = Nego_Client(url=self.config['comm_server']['comm_client'], api_key=self.config['comm_server']['api_key'], api_base=self.config['comm_server']['api_base'])
+		self.comm_client = Comm_Client(url=self.config['comm_server']['comm_client'], api_key=self.config['comm_server']['api_key'], api_base=self.config['comm_server']['api_base'])
+		self.vlm_client = VLM_Client(url=self.config['comm_server']['vlm_client'])
+		self.nego_assistant = Nego_Client(url=self.config['comm_server']['comm_client'], api_key=self.config['comm_server']['api_key'], api_base=self.config['comm_server']['api_base'])
 
 		self.dir_inten_veh = ['STOP' for _ in range(self.ego_vehicles_num)]
 		self.speed_inten_veh = ['STOP' for _ in range(self.ego_vehicles_num)]
 		self.print_comm = ''
 
 		self.dir_inten_list = ['turn left at intersection', 'turn right at intersection', 'go straight at intersection', 'follow the lane', 'left lane change', 'right lane change']
-		self.speed_inten_list = ['stop', 'normal speed', 'high speed', 'low speed', 'brake', 'stay', 'start', 'FASTER', 'SLOWER', 'STOP', 'KEEP']
-		self.speed_inten_level = [0, 3, 6, 1, 0, 0, 3]
+		self.speed_inten_list = ['STOP', 'SLOWER', 'FASTER', 'KEEP']
   
 		self.vlm_next_infer_time = [0 for _ in range(self.ego_vehicles_num)]
 		self.vlm_prev_content = [None for _ in range(self.ego_vehicles_num)]
@@ -1490,8 +885,6 @@ class PnP_infer():
 			self.round_comm_bank[id] = []
 			self.round_comm_complete_time[id] = []
 		
-		# self.used_comm = [None for _ in range(self.ego_vehicles_num)]
-		# bank to restore communication contents
 		self.comm_bank = {}
 		for id in range(self.ego_vehicles_num):
 			self.comm_bank[id] = {'speed': 'KEEP', 'nav': 'follow the lane'}
@@ -1500,14 +893,6 @@ class PnP_infer():
 		self.message_ego = ''
 		self.response_message = ''
 		self.comm_dict_ego = ''
-		self.last_proposal = 'None'
-
-		self.pair_list = []
-		for id_1 in range(self.ego_vehicles_num):
-			for id_2 in range(id_1+1, self.ego_vehicles_num):
-				self.pair_list.append([id_1,id_2])
-
-		self.dialog_record = {}
 
 		self.planning_bank = {}
 		for id_1 in range(self.ego_vehicles_num):
@@ -1519,130 +904,17 @@ class PnP_infer():
 		for id_1 in range(self.ego_vehicles_num):
 			self.nego_dur_bank[id_1] = 0
 		self.nego_group_bank = []
+		
+		realtime_mode = os.environ.get('REALTIME_MODE', '0')
+		self.realtime = True if realtime_mode=='1' else False
 
-	def judge_speed(self, i, measurements):
-		if i==7:return 2
-		if i==8:return 1
-		if i==9:return 0
-		if i==10:return 3
-
-		if i == 0 or i == 4 or i == 5:
-			return 0
-		else:
-			speed = measurements['speed']
-			if speed < self.speed_inten_level[i]-0.1:
-				return 2
-			elif speed > self.speed_inten_level[i]+0.1:
-				return 1
-			else:
-				return 3
-		return cmd_index
-
-	def negotiation(self, comm_dict_ego, comm_dict_collab, last_decision=None):
-		comm_type = self.config['llm'].get('comm_type','regular')
-		print('comm_type:',comm_type)
-
-		# print('refine-based communication!')
-		# for iter in range(2):
-		# ego -> collaborator
-		basic_message_e2c = self.comm_client.sender_1(comm_dict_ego)
-		basic_message_c2e = self.comm_client.sender_1(comm_dict_collab)
-		# self.dialog_record[self.step].append([comm_dict_ego['ego_id'],comm_dict_ego['rec_id'],basic_message_e2c])
-		# self.dialog_record[self.step].append([comm_dict_ego['rec_id'],comm_dict_ego['ego_id'],basic_message_c2e])
-		self.comm_dict_ego = comm_dict_ego
-		# collaborator -> ego
-		suggest_nav, suggest_speed, response_message, total_message = self.comm_client.receiver_1(basic_message_e2c, comm_dict_ego, self.dialog_record,self.step)
-		print('response: ', total_message)
-		self.dialog_record[self.step].append([comm_dict_ego['rec_id'],comm_dict_ego['rec_id'],total_message])
-		self.dialog_record[self.step].append([comm_dict_ego['rec_id'],comm_dict_ego['ego_id'],response_message])
-		# ego -> collaborator
-		suggest_nav_ego, suggest_speed_ego, response_message, total_message = self.comm_client.receiver_1(basic_message_c2e, comm_dict_collab, self.dialog_record,self.step)
-		print('response: ', total_message)
-		self.dialog_record[self.step].append([comm_dict_ego['ego_id'],comm_dict_ego['ego_id'],total_message])
-		self.dialog_record[self.step].append([comm_dict_ego['ego_id'],comm_dict_ego['rec_id'],response_message])
-
-		print('comm suggestion: ', suggest_nav, suggest_speed, suggest_speed_ego)
-
-		comm_results = {}
-		comm_results[comm_dict_ego['ego_id']] = {'nav': suggest_nav_ego, 'speed': suggest_speed_ego}
-		comm_results[comm_dict_ego['rec_id']] = {'nav': suggest_nav, 'speed': suggest_speed}
-
-		self.print_comm = f'Sender: id {comm_dict_ego["ego_id"]}, at {comm_dict_ego["direction"]}, {int(comm_dict_ego["distance"])} m, heading {comm_dict_ego["heading"]}, {comm_dict_ego["intention"]}, Receiver: suggest_nav: {suggest_nav}, suggest_speed: {suggest_speed}, Sender: {suggest_speed_ego}'
-		return comm_results
-
-	def group_negotiation_proposal(self, group, comm_info_list, default_order, comm_results, total_car_data_raw, total_rsu_data_raw, step, timestamp):
-		'''
-		comm_info_list = [{'ego_id': car_id, 'ego_speed': car_data_raw[car_id]['measurements']['speed'], 'ego_intention': intention, 'other_direction': dir_list, 'other_heading': heading_list, 'other_distance': dis_list, 'other_speed': speed_list, 'other_intention': intention_list}, ...]
-		'''
-		comm_type = self.config['llm'].get('comm_type','regular')
-		print('comm_type:',comm_type)
-
-		# version 0: broadcast - propose - thinking(update/agree)
-		self.local_max_round = 3
-		local_comm_content = []
-		agree_list = [False for _ in range(len(comm_info_list))]
-		max_agreement_proposal = ''
-		# print('comm_info_list: ', comm_info_list)
-
-		suggestion = ''
-		for k in range(self.local_max_round):
-			# actor
-			for order, o in enumerate(default_order):
-				car_id = comm_info_list[o]['ego_id']
-				print('\nk:', k, ' order: ', order, ' car_id: ', car_id)
-				if k==0 and order==0:
-					# propose
-					print('propose')
-					proposal = self.comm_client.propose(comm_info_list, car_id, self.last_proposal)
-					local_comm_content.append({'id': car_id, 'type': 'propose', 'message': proposal})
-					agree_list[o] = True
-				else:
-					# thinking
-					print('thinking')
-					proposal_new, agree_flag = self.comm_client.thinking(comm_info_list, car_id, local_comm_content, self.last_proposal, suggestion)
-					if agree_flag==0:
-						local_comm_content.append({'id': car_id, 'type': 'update', 'message': proposal_new})
-						agree_list = [False for _ in range(len(comm_info_list))]
-						proposal = proposal_new
-					else:
-						local_comm_content.append({'id': car_id, 'type': 'agree', 'message': proposal_new})
-						agree_list[o] = True
-				max_agreement_proposal = proposal #if sum(agree_list)>=max_agreement else max_agreement_proposal
-			# critic
-			print('\ncritic')
-			while True:
-				try:
-					action_list = self.comm_client.sum_action(max_agreement_proposal)
-					for item in comm_info_list:
-						action_list[str(item['ego_id'])]['nav'] = item['ego_intention']
-						if action_list[str(item['ego_id'])]['speed'] == 'KEEP' and item['ego_speed'] < 4:
-							action_list[str(item['ego_id'])]['speed'] = 'FASTER'
-					break
-				except Exception as e:
-					print(e)
-			print('action_list: ', action_list)
-
-			for key, value in action_list.items():
-				comm_results[int(key)] = value
-
-			pred_waypoints = []
-			for _id in group:
-				waypoints = self.get_action_from_list_inter(_id, total_car_data_raw[_id], total_rsu_data_raw[_id], step, timestamp, comm_info=comm_results[_id], nego=True)
-				pred_waypoints.append(waypoints)
-			score, suggestion, detailed_score = self.nego_client.evaluator(comm_results, local_comm_content, pred_waypoints, self.log_path, step)
-			# check agreement
-			if score>8:
-				print('Consensus reached!\n')
-				break
-			print('\n\n')
-
-		for message in local_comm_content:
-			self.dialog_record[self.step].append([message['id'],message['id'],message['message']])
-		self.print_comm = max_agreement_proposal
-		self.last_proposal = str(action_list)
-		self.comm_bank = comm_results
-
-		return comm_results
+	def judge_speed(self, i):
+		# our trained planning model set a reversed FASTER and KEEP, so need to align back the index.
+		# you can set your own mappings
+		if i==0:return 0
+		if i==1:return 1
+		if i==2:return 3
+		if i==3:return 2
 
 	def group_negotiation(self, group, comm_info_list, default_order, comm_results, total_car_data_raw, total_rsu_data_raw, step, timestamp):
 		'''
@@ -1655,22 +927,22 @@ class PnP_infer():
 		suggestion = ''
 		comm_time_all = 0
 		sum_action_time_all = 0
-		nego_eval_time_all = 0
 		for k in range(self.local_max_round):
 			# actor
 			for order, o in enumerate(default_order):
 				car_id = comm_info_list[o]['ego_id']
-				print('\nactor: local round: ', k, ' order: ', order, ' car_id: ', car_id)
+				print('actor\n local round: ', k, ' order: ', order, ' car_id: ', car_id)
 				message, comm_time = self.comm_client.comm(comm_info_list, car_id, local_comm_content, suggestion)
-				print(f"round {k} comm time {comm_time} car id {car_id}")
-				comm_time_all += comm_time
+				print('message: ', message)
+				if self.realtime:
+					print(f"round {k} comm time {comm_time} car id {car_id}")
+					comm_time_all += comm_time
 				local_comm_content.append({'id': car_id, 'message': message})
 			# critic
 			print('\ncritic')
 			while True:
 				try:
 					action_list, sum_action_time = self.comm_client.sum_action(local_comm_content[-len(group):])
-					print(f"round {k} sum action time {sum_action_time}")
 					for item in comm_info_list:
 						action_list[str(item['ego_id'])]['nav'] = item['ego_intention']
 						if action_list[str(item['ego_id'])]['speed'] == 'KEEP' and item['ego_speed'] < 4:
@@ -1683,7 +955,9 @@ class PnP_infer():
 				except Exception as e:
 					print(e)
 			print('action_list: ', action_list)
-			sum_action_time_all += sum_action_time
+			if self.realtime:
+				print(f"round {k} sum action time {sum_action_time}")
+				sum_action_time_all += sum_action_time
 
 			for key, value in action_list.items():
 				comm_results[int(key)] = value
@@ -1692,7 +966,9 @@ class PnP_infer():
 			for _id in group:
 				waypoints = self.get_action_from_list_inter(_id, total_car_data_raw[_id], total_rsu_data_raw[_id], step, timestamp, comm_info=comm_results[_id], nego=True)
 				pred_waypoints.append(waypoints)
-			score, suggestion, detailed_score = self.nego_client.evaluator(comm_results, local_comm_content, pred_waypoints, self.log_path, step)
+
+			score, suggestion, detailed_score = self.nego_assistant.evaluator(comm_results, local_comm_content, pred_waypoints, self.log_path, step)
+
 			for id in group:
 				self.round_comm_complete_time[id].append(step*0.05+ comm_time_all + sum_action_time_all)
 			for key, value in comm_results.items():
@@ -1703,16 +979,16 @@ class PnP_infer():
 				print('Consensus reached!\n')
 				break
 			print('\n\n')
-		print("step: ", step, "round_comm_complete_time: ", self.round_comm_complete_time, "round_comm_bank: ", self.round_comm_bank)
-		for message in local_comm_content:
-			self.dialog_record[self.step].append([message['id'],message['id'],message['message']])
+
+		print("step: ", step, "round_comm_complete_time: ", self.round_comm_complete_time)
 		self.print_comm = f'comm results: {self.comm_bank}, current time: {step*0.05}, nego_dur_time: {self.nego_dur_bank}, next_comm_time: {self.next_comm_time}, vlm_next_infer_time: {self.vlm_next_infer_time}'
-		self.last_proposal = str(action_list)
-		# comm_bank中存储的是将要使用的comm结果，应在本次comm结束后才能使用（next_comm_time之后）		
+
+		# The comm_bank stores the comm result to be used, and it should be used after the comm ends (after next_comm_time)	
 		self.comm_bank = self.prev_comm
 		for key, value in comm_results.items():
 			self.prev_comm[key] = value
-		# 如果路径刚开始就进行comm，那么可以直接使用，因为没有预留协商时间，和实际情况不符
+
+		# If the path starts comm, it can be used directly because there is no negotiation time reserved, which does not match the actual situation
 		for id, comm_info in enumerate(self.comm_bank):
 			if comm_info is None:
 				self.comm_bank[id] = self.prev_comm[id]
@@ -1721,14 +997,14 @@ class PnP_infer():
 		for car_id in group:
 			self.next_comm_time[car_id] = step*0.05 + comm_time_all + sum_action_time_all
 		print("current_time:", step*0.05, "next_comm_time:", self.next_comm_time)
-		print("current comm results:", self.comm_bank)
+		# print("current comm results:", self.comm_bank)
 
 		return comm_results
 
 	def form_comm_group(self, car_data_raw, step):
 		'''construct communication graph, agent i and j will communicate if their safety score is below a threshold'''
 		def find_connected_vehicles(i):
-			'''用DFS方法查找所有连通的车辆'''
+			'''Use DFS to find all connected vehicles'''
 			stack = [i]
 			connected_vehicles = []
 			max_dur_in_group = 0
@@ -1740,8 +1016,8 @@ class PnP_infer():
 					connected_vehicles.append(vehicle)
 					for j in range(self.ego_vehicles_num):
 						if not visited[j] and car_data_raw[j] is not None:
-							min_distance, safety_score, dur = self.nego_client.safety_score(self.planning_bank[vehicle], self.planning_bank[j])
-							self.nego_client.plot_and_save_waypoints([self.planning_bank[vehicle], self.planning_bank[j]], self.log_path / pathlib.Path(f'waypoints/{step}_{vehicle}_{j}_{round(min_distance, 2)}.png'))
+							min_distance, safety_score, dur = self.nego_assistant.safety_score(self.planning_bank[vehicle], self.planning_bank[j])
+							self.nego_assistant.plot_and_save_waypoints([self.planning_bank[vehicle], self.planning_bank[j]], self.log_path / pathlib.Path(f'waypoints/{step}_{vehicle}_{j}_{round(min_distance, 2)}.png'))
 							if safety_score < 0.75:
 								stack.append(j)
 								print('safety_score: ', safety_score)
@@ -1767,14 +1043,14 @@ class PnP_infer():
 			return nego_groups, nego_group_bank
 
 		nego_groups = []
-		group_max_durs = []  # 存储每个组的最大dur
+		group_max_durs = []
 		visited = [False] * self.ego_vehicles_num
-		# 遍历所有车辆，查找所有间接影响的车辆组
+		# Traverse all vehicles and find all indirectly affected vehicle groups
 		print('\nFind connected vehicles...')
 		for i in range(self.ego_vehicles_num):
 			if not visited[i] and car_data_raw[i] is not None:
-				group, max_dur = find_connected_vehicles(i)  # 获取组和对应的max_dur
-				if len(group) > 1:  # 只把包含多个车辆的组添加到nego_groups
+				group, max_dur = find_connected_vehicles(i)
+				if len(group) > 1:
 					comm_flag = True
 					for car_id in group:
 						if step * 0.05 < self.next_comm_time[car_id]:
@@ -1782,10 +1058,10 @@ class PnP_infer():
 							break
 					if comm_flag:
 						nego_groups.append(group)
-						group_max_durs.append(max_dur)  # 添加组内最大dur
-		print('Connected vehicles:', nego_groups)
-		print('group_max_durs:', group_max_durs)
-		print('self.nego_group_bank:', self.nego_group_bank)
+						group_max_durs.append(max_dur)
+		# print('Connected vehicles:', nego_groups)
+		# print('group_max_durs:', group_max_durs)
+		# print('self.nego_group_bank:', self.nego_group_bank)
 
 		group_bank = self.nego_group_bank.copy()
 		for group in group_bank:
@@ -1816,12 +1092,10 @@ class PnP_infer():
 
 	def get_action_from_list_multi_vehicle(self, car_data_raw, rsu_data_raw, step, timestamp):
 		# keys(['gps_x', 'gps_y', 'x', 'y', 'theta', 'speed', 'compass', 'command', 'target_point'])
-		# self.dialog_record: {step: [[sender_id,reciever_id,content],...]}
 		print('step infer time: ', (step+1)*0.05, self.vlm_next_infer_time, self.next_comm_time)
 		## re-pack driving information
 		self.step = step
-		self.nego_client.nego_content['action'][step] = []
-		self.dialog_record[step] = []
+		self.nego_assistant.nego_content['action'][step] = []
 		control_all = []
 		total_car_data_raw = []
 		total_rsu_data_raw = []
@@ -1864,7 +1138,7 @@ class PnP_infer():
 				# check negotiation duration
 				if step < self.nego_dur_bank[ego_id]:
 					comm_info = self.comm_bank[ego_id]
-					print('ego inference time: ', step*0.05, "round_comm_complete_time: ", self.round_comm_complete_time[ego_id], "round_comm_bank: ", self.round_comm_bank[ego_id])
+					# print('ego inference time: ', step*0.05, "round_comm_complete_time: ", self.round_comm_complete_time[ego_id], "round_comm_bank: ", self.round_comm_bank[ego_id])
 					while len(self.round_comm_complete_time[ego_id]) > 0 and step * 0.05 > self.round_comm_complete_time[ego_id][0]:
 						self.round_comm_complete_time[ego_id].pop(0)
 						comm_info = self.round_comm_bank[ego_id].pop(0)	
@@ -1878,7 +1152,7 @@ class PnP_infer():
 				control_all.append(self.prev_control[ego_id])
 
 		with open(self.log_path / pathlib.Path("nego.json"), 'w') as f:
-			json.dump(self.nego_client.nego_content, f, indent=4)
+			json.dump(self.nego_assistant.nego_content, f, indent=4)
 
 		return control_all
 
@@ -1905,16 +1179,12 @@ class PnP_infer():
 							'rsu_data': rsu_data_raw}
 			self.pre_raw_data_bank.update({step: raw_data_dict})
 			latency_step = self.config['simulation']['comm_latency']
-
-			# print('step:',step)
-			# print('len_laten_bank:', len(self.pre_raw_data_bank.keys()))
 			sorted_keys = sorted(list(self.pre_raw_data_bank.keys()))
 			if step > latency_step:
 				if step-sorted_keys[0] > latency_step:   
 					self.pre_raw_data_bank.pop(sorted_keys[0])
 				if step-latency_step in self.pre_raw_data_bank:
 					raw_data_used = self.pre_raw_data_bank[step-latency_step]
-					# print('get data from step:', step-latency_step)
 					for i in range(len(car_data_raw)):
 						if i > 0:
 							car_data_raw[i] = raw_data_used['car_data'][i]
@@ -1951,12 +1221,6 @@ class PnP_infer():
 		batch_data_perception = self.perception_dataloader.collate_batch_test(batch_data_perception, online_eval_only=False)
 		batch_data_perception = train_utils.to_device(batch_data_perception, self.device)
 		
-		# infer_result = inference_utils.inference_intermediate_fusion_multiclass(batch_data_perception,
-		# 												self.perception_model,
-		# 												self.perception_dataloader,
-		# 												online_eval_only=True)
-
-		############## end2end output ###########################
 		output_dict = OrderedDict()
 		for cav_id, cav_content in batch_data_perception.items():
 			output_dict[cav_id] = self.perception_model(cav_content)
@@ -1968,7 +1232,6 @@ class PnP_infer():
 						"gt_box_tensor" : gt_box_tensor}
 		if "comm_rate" in output_dict['ego']:
 			infer_result.update({"comm_rate" : output_dict['ego']['comm_rate']})
-		############################################################
 
 		# record perception info
 		perception_num = []
@@ -2001,7 +1264,6 @@ class PnP_infer():
 				infer_result['pred_box_tensor'][:,:,1] = tmp
 			measurements = car_data_raw[0]['measurements']
 			num_object = infer_result['pred_box_tensor'].shape[0]
-			# if num_object > 0:
 			object_list = []
 			# transform from lidar pose to ego pose
 			for i in range(num_object):
@@ -2016,7 +1278,6 @@ class PnP_infer():
 					)
 				location_box = np.mean(transformed_box[:4,:2], 0)
 				if np.linalg.norm(location_box) < 1.4:
-					# del perception_num[i]
 					continue
 				else:
 					try:
@@ -2038,22 +1299,19 @@ class PnP_infer():
 			occ_map = turn_traffic_into_map(processed_pred_box, self.det_range)
 
 		# # N, K, H, W, C=7
-		# occ_map = turn_traffic_into_map(pred_traffic, self.det_range)
 		occ_map_shape = occ_map.shape
 		occ_map = torch.from_numpy(occ_map).cuda().contiguous().view((-1, 1) + occ_map_shape[1:]) 
 		# N, 1, H, W
-		
 		
 		da = []
 		for i in range(1): # len(car_data_raw)
 			da.append(torch.from_numpy(car_data_raw[i]['drivable_area']).cuda().float().unsqueeze(0))
 		
-		################### load feature ###########################
+		# load feature
 		perception_results = output_dict['ego']
 		fused_feature_2 = perception_results['fused_feature'].permute(0,1,3,2) #  ([2, 128, 96, 288]) -> ([2, 128, 288, 96])
 		fused_feature_3 = torch.flip(fused_feature_2, dims=[2])
 		feature = fused_feature_3[:,:,:192,:]
-		############################################################
 
 		self.perception_memory_bank[ego_id].pop(0)
 		if len(self.perception_memory_bank[ego_id])<5:
@@ -2066,14 +1324,15 @@ class PnP_infer():
 					'feature': feature, # N, 128, H, W
 				})
 		
-		
 		ego_llm_id = 0
 		ego_data = car_data_raw[ego_llm_id] # raw data for ego vehicle
 		front_img = ego_data['rgb_front']
 		measurements = car_data_raw[0]['measurements']
 		self.cmd_direction = torch.zeros(6)
 		self.cmd_speed = torch.zeros(4)
+
 		### input prompt and images for llms
+		# update vlm output: execute vlm inference, and the result should be adopted when next inference starts (end of this inference)
 		if (step+1)*0.05 > self.vlm_next_infer_time[ego_id]:
 			print(f'\nVLM infering for car {ego_id}...')
 			system_prompt = read_txt_file(self.config['llm']['system_prompt_file'])
@@ -2081,23 +1340,24 @@ class PnP_infer():
 			system_prompt = self.vlm_client.edit_prompt(system_prompt, measurements, comm_info, self.perception_info, det_type)
 
 			output_content, infer_time = self.vlm_client.infer(front_img, system_prompt)
-			self.vlm_next_infer_time[ego_id] += infer_time
 			self.vlm_prev_content[ego_id] = self.vlm_current_content[ego_id]
 			self.vlm_current_content[ego_id] = output_content
+			# if not have stored output, use current output to init
 			if self.vlm_prev_content[ego_id] is None:
-				self.vlm_prev_content[ego_id] = output_content  			
-
+				self.vlm_prev_content[ego_id] = output_content
+			
+			if not self.realtime:
+				infer_time = 0
+				self.vlm_prev_content[ego_id] = output_content
+			self.vlm_next_infer_time[ego_id] += infer_time
 			print('vlm output:',output_content)
+
+		# adopt vlm output
 		try:
-			# t = time.time()
 			if comm_info != None:
 				for i, speed_inten in enumerate(self.speed_inten_list):
 					if speed_inten == comm_info['speed']:
-						cmd_index = self.judge_speed(i, measurements)
-						if cmd_index == 2:
-							cmd_index=3
-						elif cmd_index == 3:
-							cmd_index=2
+						cmd_index = self.judge_speed(i)
 						self.cmd_speed[cmd_index] = 1
 						self.speed_inten_veh[ego_id] = speed_inten
 						break
@@ -2106,9 +1366,9 @@ class PnP_infer():
 						self.cmd_direction[i] = 1
 						self.dir_inten_veh[ego_id] = dir_inten
 						break
-				print('action taken: ', comm_info['nav'], comm_info['speed'])
-			else:		
-				# add navigation
+				print('using nego result: ', comm_info['nav'], comm_info['speed'])
+			else:
+				# nav info is steady in vlm output, so we omit the vlm output of nav to save time
 				command = int(measurements['command'])
 				if command in command_dict.keys():
 					command_str = command_dict[command]
@@ -2116,7 +1376,6 @@ class PnP_infer():
 					command_str = 'no command'
 				output_content = self.vlm_prev_content[ego_id] + ' ' + command_str
 				print(f"using vlm output: {self.vlm_prev_content[ego_id]}")
-				print(f"vlm to output: {self.vlm_current_content[ego_id]}")
 
 				for i, dir_inten in enumerate(self.dir_inten_list):
 					if dir_inten in output_content:
@@ -2125,23 +1384,12 @@ class PnP_infer():
 						break
 				for i, speed_inten in enumerate(self.speed_inten_list):
 					if speed_inten in output_content:
-						cmd_index = self.judge_speed(i, measurements)
-						if cmd_index == 2:
-							cmd_index=3
-						elif cmd_index == 3:
-							cmd_index=2
+						cmd_index = self.judge_speed(i)
 						self.cmd_speed[cmd_index] = 1
 						self.speed_inten_veh[ego_id] = speed_inten
 						break
-				# print('self.cmd_direction:',self.cmd_direction)
-				# print('self.cmd_speed:',self.cmd_speed)
-				# cost = infer_time
-				# self.total_infer_step += 1
-				# self.total_time_cost += cost 
-				# print('step:{}, total cost:{:.2f}, avg cost:{:.2f}'.format(step,self.total_time_cost, self.total_time_cost/self.total_infer_step))
 		except Exception as e:
 			print('vlm inference failed because ', e)
-
 
 		### Turn the memoried perception output into planning input
 		planning_input = self.generate_planning_input(ego_id) # planning_input['occupancy'] [1, 5, 6, 192, 96] planning_input['target'] [1,2]
@@ -2153,8 +1401,6 @@ class PnP_infer():
 		x_world = measurements['x']
 		y_world = measurements['y']
 		theta = measurements['theta']
-		# print('step:', step, 'id:', ego_id, 'x_world:',x_world, 'y_world:',y_world, 'theta:',theta)
-		# print('waypoints:',predicted_waypoints[0])
 
 		theta_prime = theta
 		rotation_matrix = np.array([
@@ -2169,17 +1415,16 @@ class PnP_infer():
 			transformed_point += np.array([x_world, y_world])
 			transformed_waypoints.append(transformed_point)
 		waypoints = np.array(transformed_waypoints)
-		print('waypoints:',waypoints[0], waypoints[9], waypoints[-1])
+		# print('waypoints:',waypoints[0], waypoints[9], waypoints[-1])
 
 		if nego:
 			return waypoints
 		else:
 			self.planning_bank[ego_id] = waypoints
 			if comm_info != None:
-				self.nego_client.nego_content['action'][step].append(comm_info['speed'])
+				self.nego_assistant.nego_content['action'][step].append(comm_info['speed'])
 			else:
-				# self.nego_client.nego_content['action'][step].append(output_content)
-				pass #FIXME: 这里为什么会报错？output_content按说必定存在的
+				pass
 
 		# visualization
 		if step % self.skip_frames == 0:
@@ -2251,7 +1496,6 @@ class PnP_infer():
 		##################  end2end feature #####################
 		feature_dim = self.perception_memory_bank[ego_id][0]['feature'].shape[1] # 128,256
 		feature_to_warp = torch.zeros(1, 5, feature_dim, 192, 96).cuda().float() # self.ego_vehicles_num, 5, feature_dim, 192, 96
-
 
 		feature_warped_list = []
 
@@ -2333,28 +1577,8 @@ class PnP_infer():
 			control.steer = float(steer)
 			control.throttle = float(throttle)
 			control.brake = float(brake)
-
-			# if step % 2 != 0 and step > 4:
-			# 	control = self.prev_control[ego_i]
-			# else:
-			# 	self.prev_control[ego_i] = control
 			self.prev_control[ego_id] = control
-
-
 			control_all.append(control)
-			
-			#### useful for a extral expert decision
-			# self._vehicle = CarlaDataProvider.get_hero_actor(hero_id=count_i)
-			# ### decision from expert
-			# self.should_brake = self._should_brake()
-
-			# route_info["is_junction"] = self.is_junction
-			# route_info["is_vehicle_present"] = self.is_vehicle_present
-			# route_info["is_bike_present"] = self.is_bike_present
-			# # route_info["is_lane_vehicle_present"] = self.is_lane_vehicle_present
-			# # route_info["is_junction_vehicle_present"] = self.is_junction_vehicle_present
-			# route_info["is_pedestrian_present"] = self.is_pedestrian_present
-			# route_info["should_brake"] = int(self.should_brake)
 
 			route_info['speed'] = route_info['speed'].tolist()
 			route_info['target'] = route_info['target'].tolist()
@@ -2370,26 +1594,19 @@ class PnP_infer():
 
 			tick_data[ego_i]["planning"] = route_info
 
-
 			cur_actors = planning_input["occupancy"][ego_i][-1][:3].cpu().permute(1, 2, 0).contiguous().numpy()
 			cur_bev = (planning_input["occupancy"][ego_i][-1][-1:].cpu().permute(1, 2, 0).repeat(1, 1, 3)*120).contiguous().numpy()
 			tick_data[ego_i]["map"] = np.where(cur_actors.sum(axis=2, keepdims=True)>5, cur_actors, cur_bev)
-			# pdb.set_trace()
 			tick_data[ego_i]["map"] = (tick_data[ego_i]["map"]/tick_data[ego_i]["map"].max()*255).astype(np.uint8)
 			# 192, 96, 3
-			# planning_input["occupancy"][ego_i][-1][0] = perception_total_total[ego_i][-1]
 			cur_actors = planning_input["occupancy"][ego_i][-1][:3].cpu().permute(1, 2, 0).contiguous().numpy()
 			cur_bev = (planning_input["occupancy"][ego_i][-1][-1:].cpu().permute(1, 2, 0).repeat(1, 1, 3)*120).contiguous().numpy()
 			tick_data[ego_i]["map_gt"] = np.where(cur_actors.sum(axis=2, keepdims=True)>5, cur_actors, cur_bev)
-			# pdb.set_trace()
 			tick_data[ego_i]["map_gt"] = (tick_data[ego_i]["map_gt"]/tick_data[ego_i]["map_gt"].max()*255).astype(np.uint8)
 			# 192, 96, 3
 			tick_data[ego_i]["map_t1"] = planning_input["occupancy"][ego_i][-2][:3].cpu().permute(1, 2, 0).numpy()
 
-			# tick_data[ego_i]["map_gt"] = perception_total[ego_i][-1][:3].cpu().permute(1, 2, 0).numpy()
 			tick_data[ego_i]["rgb_raw"] = car_data_raw[ego_i]["rgb_front"]
-			# print(car_data_raw[ego_i]["rgb_front"].shape)
-			# print(batch_data[ego_i]["lidar"].shape)
 			tick_data[ego_i]["lidar"] = np.rot90((np.transpose(car_data[ego_i]["lidar_original"], (1, 2, 0))*127).astype(np.uint8), k=1, axes=(1,0))
 			try:
 				tick_data[ego_i]["lidar_rsu"] = np.rot90((np.transpose(rsu_data[ego_i]["lidar_original"], (1, 2, 0))*127).astype(np.uint8), k=1, axes=(1,0))
@@ -2397,19 +1614,14 @@ class PnP_infer():
 				tick_data[ego_i]["lidar_rsu"] = np.ones_like(tick_data[ego_i]["lidar"])
 			tick_data[ego_i]["rgb_left_raw"] = car_data_raw[ego_i]["rgb_left"]
 			tick_data[ego_i]["rgb_right_raw"] = car_data_raw[ego_i]["rgb_right"]
-			# print(tick_data[ego_i]["rgb_raw"].shape)
-			# print(tick_data[ego_i]["map"].shape)
-			# raise ValueError
-			# pdb.set_trace()
+
 			for t_i in range(self.waypoints_num):
 				try:
 					tick_data[ego_i]["map"][int(pred_waypoints[t_i][1]*4+144), int(pred_waypoints[t_i][0]*4+48)] = np.array([255, 0, 0])
 				except Exception as e:
 					print(e)
 					print('ego_i', ego_i, int(pred_waypoints[t_i][1]*4+144), int(pred_waypoints[t_i][0]*4+48), pred_waypoints[t_i])
-				# tick_data[ego_i]["map"] = cv2.circle(tick_data[ego_i]["map"], (int(pred_waypoints[t_i][1]*4+144), int(pred_waypoints[t_i][0]*4+48)), radius=2, color=(255, 255, 255))
 			tick_data[ego_i]["map"] = cv2.resize(tick_data[ego_i]["map"], (300, 600))
-			# print(tick_data[ego_i]["map"].shape)
 			tick_data[ego_i]["map_t1"] = cv2.resize(tick_data[ego_i]["map_t1"], (300, 600))
 			tick_data[ego_i]["map_gt"] = cv2.resize(tick_data[ego_i]["map_gt"], (300, 600))
 			tick_data[ego_i]["rgb"] = cv2.resize(tick_data[ego_i]["rgb_raw"], (3000, 1500))
@@ -2453,8 +1665,6 @@ class PnP_infer():
 			if step % self.skip_frames == 0:
 				tick_data[ego_i]["lidar_3d"] = batch_data["lidar_3d"]
 				tick_data[ego_i]["lidar_bev"] = batch_data["lidar_bev"]
-
-				# NOTE: to-be check
 				surface = self._hic.run_interface(tick_data[ego_i])
 				tick_data[ego_i]["surface"] = surface
 		
@@ -2476,15 +1686,8 @@ class PnP_infer():
 			)
 			results_to_write = {}
 			results_to_write.update(tick_data[ego_i]['planning'])
-			# results_to_write.update({'message_ego':self.message_ego})
-			# results_to_write.update({'response_message':self.response_message})
-			# results_to_write.update({'message_0':self.dialog_record[0][0]})
-			# results_to_write.update({'message_1':self.dialog_record[1][1]})			
-			# results_to_write.update({'cons_anly':self.cons_anly})
-			# results_to_write.update({'comm_dict':self.comm_dict_ego})
 			with open(folder_path / ("%04d.json" % frame), 'w') as f:
 				json.dump(results_to_write, f, indent=4)
-				# json.dump(tick_data[ego_i]['planning'], f, indent=4)
 		return
 
 
@@ -2527,9 +1730,6 @@ class PnP_infer():
 		img_after = torch.from_numpy(img_after[:48*8, 48*4:48*8])
 
 		return img_after
-	
-
-
 
 	def check_data(self, raw_data, car=True):
 		mask = []
@@ -2542,19 +1742,9 @@ class PnP_infer():
 				mask.append(0)
 				data.append(0)
 		return data, mask
-	
 
 	def preprocess_data(self, data, car=True):
-		output_record = {
-		}
-		
-		##########
-		## load and pre-process images
-		##########
-		
-		##########
-		## load environment data and control signal
-		##########	
+		output_record = {}
 		measurements = data['measurements']
 		cmd_one_hot = [0, 0, 0, 0, 0, 0]
 		if not car:
@@ -2578,7 +1768,8 @@ class PnP_infer():
 		
 		output_record['lidar_pose'] = np.array([-lidar_pose_y, lidar_pose_x, lidar_theta])
 
-		## 计算density map中心点的世界坐标，目前density map预测范围为左右10m前18m后2m
+		## Calculate the world coordinates of the center point of density map. 
+		# The current density map prediction range is 10m left and right, 18m first and 2m after
 		detmap_pose_x = measurements['lidar_pose_x'] + self.distance_to_map_center*np.cos(measurements["theta"]-np.pi/2)
 		detmap_pose_y = measurements['lidar_pose_y'] + self.distance_to_map_center*np.sin(measurements["theta"]-np.pi/2)
 		detmap_theta = measurements["theta"] + np.pi/2
@@ -2589,7 +1780,6 @@ class PnP_infer():
 		## load and pre-process LiDAR from 3D point cloud to 2D map
 		##########
 		lidar_unprocessed = data['lidar'][:, :3]
-		# print(lidar_unprocessed.shape)
 		lidar_unprocessed[:, 1] *= -1
 		if not car:
 			lidar_unprocessed[:, 2] = lidar_unprocessed[:, 2] + np.array([measurements["lidar_pose_z"]])[np.newaxis, :] - np.array([2.1])[np.newaxis, :] 
@@ -2597,14 +1787,8 @@ class PnP_infer():
 		lidar_processed = self.lidar_to_histogram_features(
 			lidar_unprocessed, crop=self.input_lidar_size, lidar_range=self.lidar_range
 		)		
-		# if self.lidar_transform is not None:
-		# 	lidar_processed = self.lidar_transform(lidar_processed)
 		output_record["lidar_original"] = lidar_processed
 
-		# lidar_unprocessed[:, 0] *= -1
-
-		# voxel_dict = self.voxel_preprocess.preprocess(lidar_unprocessed)
-		# output_record["lidar"] = voxel_dict
 		return output_record
 
 
@@ -2613,7 +1797,6 @@ class PnP_infer():
 		lidar_data[:, 1] *= -1
 		actors_data = self.collect_actor_data()
 		original_actors_data = copy.deepcopy(actors_data)
-
 		
 		ego_x = measurements["lidar_pose_x"]
 		ego_y = measurements["lidar_pose_y"]
@@ -2653,14 +1836,12 @@ class PnP_infer():
 		corners = boxes_to_corners_3d(boxes_corner, order='lwh')
 
 		lidar_visible = []
-		# print(lidar_unprocessed[:20])
 		for N in range(boxes_corner.shape[0]):
 			if actors_data[id_map[N]]['tpe']==2:
 				original_actors_data[id_map[N]]['lidar_visible'] = 0
 				original_actors_data[id_map[N]]['camera_visible'] = 0
 				continue
 			num_lidar_points = get_points_in_rotated_box_3d(lidar_data, corners[N])
-			# print(len(num_lidar_points))
 			if len(num_lidar_points)>8:
 				original_actors_data[id_map[N]]['lidar_visible'] = 1
 				original_actors_data[id_map[N]]['camera_visible'] = 0
@@ -2669,10 +1850,7 @@ class PnP_infer():
 				original_actors_data[id_map[N]]['lidar_visible'] = 0
 				original_actors_data[id_map[N]]['camera_visible'] = 0
 				lidar_visible += [0]
-		# print(lidar_visible)
 		return original_actors_data
-
-
 
 	def collect_actor_data(self, ego_id):
 		data = {}
@@ -2714,9 +1892,6 @@ class PnP_infer():
 			except:
 				del data[_id]
 				continue
-				data[_id]["box"] = [0.3400000035762787,
-									0.3400000035762787,
-									0.9300000071525574]
 			try:
 				vel = actor.get_velocity()
 				data[_id]["vel"] = [vel.x, vel.y, vel.z]
@@ -2737,35 +1912,21 @@ class PnP_infer():
 		walker_list = list(walker_list)
 
 		vehicle = self._is_vehicle_hazard(vehicle_list, command)  # actors.filter("*vehicle*")
-		# lane_vehicle = self._is_lane_vehicle_hazard(vehicle_list, command)
-		# junction_vehicle = self._is_junction_vehicle_hazard(
-		# 	vehicle_list, command
-		# )
-		# light = self._is_light_red(actors.filter("*traffic_light*"))
 		walker = self._is_walker_hazard(walker_list) # actors.filter("*walker*")
 		bike = self._is_bike_hazard(vehicle_list)
-		# stop_sign = self._is_stop_sign_hazard(actors.filter("*stop*"))
-
 		# record the reason for braking
 		self.is_vehicle_present = [x.id for x in vehicle]
-		# self.is_lane_vehicle_present = [x.id for x in lane_vehicle]
-		# self.is_junction_vehicle_present = [x.id for x in junction_vehicle]
 		self.is_pedestrian_present = [x.id for x in walker]
 		self.is_bike_present = [x.id for x in bike]
-		# self.is_red_light_present = [x.id for x in light]
-		# self.is_stop_sign_present = [x.id for x in stop_sign]
 
 		self.is_junction = self._map.get_waypoint(
 			self._vehicle.get_location()
 		).is_junction
 
-
 		return any(
 			len(x) > 0
 			for x in [
 				vehicle,
-				# lane_vehicle,
-				# junction_vehicle,
 				bike,
 				walker,
 			]
@@ -3263,12 +2424,6 @@ class PnP_infer():
 
 			# Set j-th car as the ego-car.
 			output_dict["lidar_original"].append(torch.from_numpy(car_data[j]['lidar_original']).unsqueeze(0))
-			# output_dict["voxel_features"].append(car_data[j]['lidar']['voxel_features'])
-			# output_dict["voxel_num_points"].append(car_data[j]['lidar']['voxel_num_points'])
-			# coords =car_data[j]['lidar']["voxel_coords"]
-			# output_dict["voxel_coords"].append(
-			# 	np.pad(coords, ((0, 0), (1, 0)),
-			# 		mode='constant', constant_values=count)) 
 					
 			output_dict["lidar_pose"].append(torch.from_numpy(car_data[j]['lidar_pose']).unsqueeze(0).cuda().float())
 			output_dict["detmap_pose"].append(torch.from_numpy(car_data[j]['detmap_pose']).unsqueeze(0).cuda().float())
@@ -3276,34 +2431,17 @@ class PnP_infer():
 			for i in range(len(car_data)):
 				if i==j:
 					continue
-				output_dict["lidar_original"].append(torch.from_numpy(car_data[i]['lidar_original']).unsqueeze(0))
-				# output_dict["voxel_features"].append(car_data[i]['lidar']['voxel_features'])
-				# output_dict["voxel_num_points"].append(car_data[i]['lidar']['voxel_num_points'])
-				# coords =car_data[i]['lidar']["voxel_coords"]
-				# output_dict["voxel_coords"].append(
-				# 	np.pad(coords, ((0, 0), (1, 0)),
-				# 		mode='constant', constant_values=count)) 
-						
+				output_dict["lidar_original"].append(torch.from_numpy(car_data[i]['lidar_original']).unsqueeze(0))						
 				output_dict["lidar_pose"].append(torch.from_numpy(car_data[i]['lidar_pose']).unsqueeze(0).cuda().float())
 				output_dict["detmap_pose"].append(torch.from_numpy(car_data[i]['detmap_pose']).unsqueeze(0).cuda().float())
 				count += 1
 			for i in range(len(rsu_data)):
-				output_dict["lidar_original"].append(torch.from_numpy(rsu_data[i]['lidar_original']).unsqueeze(0))
-				# output_dict["voxel_features"].append(rsu_data[i]['lidar']['voxel_features'])
-				# output_dict["voxel_num_points"].append(rsu_data[i]['lidar']['voxel_num_points'])
-				# coords =rsu_data[i]['lidar']["voxel_coords"]
-				# output_dict["voxel_coords"].append(
-				# 	np.pad(coords, ((0, 0), (1, 0)),
-				# 		mode='constant', constant_values=count)) 
-						
+				output_dict["lidar_original"].append(torch.from_numpy(rsu_data[i]['lidar_original']).unsqueeze(0))						
 				output_dict["lidar_pose"].append(torch.from_numpy(rsu_data[i]['lidar_pose']).unsqueeze(0).cuda().float())
 				output_dict["detmap_pose"].append(torch.from_numpy(rsu_data[i]['detmap_pose']).unsqueeze(0).cuda().float())
 				count += 1
 		for key in ["target", "lidar_pose", "detmap_pose" , "lidar_original"]:  # 
 			output_dict[key] = torch.cat(output_dict[key], dim=0)
-		
-		# for key in ["voxel_features", "voxel_coords", "voxel_num_points"]:
-		# 	output_dict[key] = torch.from_numpy(np.concatenate(output_dict[key], axis=0)).cuda().float()
 		
 		output_dict["record_len"] = torch.from_numpy(np.array(output_dict["record_len"]))
 
@@ -3362,11 +2500,8 @@ def visualize(infer_result, pcd, pc_range, save_path, method='3d', left_hand=Fal
 
 		pc_range = [int(i) for i in pc_range]
 
-		pcd_np_rsu = None
-
 		if isinstance(pcd, list):
 			pcd_np = pcd[0].cpu().numpy()
-			pcd_np_rsu = pcd[1].cpu().numpy()
 		else:
 			pcd_np = pcd.cpu().numpy()
 
@@ -3388,12 +2523,10 @@ def visualize(infer_result, pcd, pc_range, save_path, method='3d', left_hand=Fal
 
 		if pred_box_tensor is not None:
 			pred_box_np = pred_box_tensor.cpu().numpy()
-			pred_name = ['pred'] * pred_box_np.shape[0]
 
 			score = infer_result.get("score_tensor", None)
 			if score is not None:
 				score_np = score.cpu().numpy()
-				pred_name = [f'score:{score_np[i]:.3f}' for i in range(score_np.shape[0])]
 
 			uncertainty = infer_result.get("uncertainty_tensor", None)
 			if uncertainty is not None:
@@ -3406,33 +2539,20 @@ def visualize(infer_result, pcd, pc_range, save_path, method='3d', left_hand=Fal
 					uncertainty_np = np.sqrt(uncertainty_np) 
 					# yaw angle is in radian, it's the same in g2o SE2's setting.
 
-					pred_name = [f'x_u:{uncertainty_np[i,0]:.3f} y_u:{uncertainty_np[i,1]:.3f} a_u:{uncertainty_np[i,2]:.3f}' \
-									for i in range(uncertainty_np.shape[0])]
-
 				elif uncertainty_np.shape[1] == 2:
 					uncertainty_np[:,:2] *= d_a_square
 					uncertainty_np = np.sqrt(uncertainty_np) # yaw angle is in radian
 
-					pred_name = [f'x_u:{uncertainty_np[i,0]:.3f} y_u:{uncertainty_np[i,1]:3f}' \
-									for i in range(uncertainty_np.shape[0])]
-
 				elif uncertainty_np.shape[1] == 7:
 					uncertainty_np[:,:2] *= d_a_square
-					uncertainty_np = np.sqrt(uncertainty_np) # yaw angle is in radian
-
-					pred_name = [f'x_u:{uncertainty_np[i,0]:.3f} y_u:{uncertainty_np[i,1]:3f} a_u:{uncertainty_np[i,6]:3f}' \
-									for i in range(uncertainty_np.shape[0])]                    
+					uncertainty_np = np.sqrt(uncertainty_np) # yaw angle is in radian     
 
 		if gt_box_tensor is not None:
 			gt_box_np = gt_box_tensor.cpu().numpy()
-			gt_name = ['gt'] * gt_box_np.shape[0]
 
 		mode_list = ['gt','pred','gt+pred']
 
-		filte_array_list = []
 		filte_array = None
-		# if gt_box_tensor is not None:
-		# 	filte_array_list.append(gt_box_np)
 		if pred_box_tensor is not None:
 			if len(pred_box_tensor) > 0:
 				pred_box_clone = pred_box_tensor.clone()
@@ -3457,7 +2577,6 @@ def visualize(infer_result, pcd, pc_range, save_path, method='3d', left_hand=Fal
 				location_box = np.mean(transformed_box[:4,:2], 0)
 				if np.linalg.norm(location_box) < 1.4:
 					ego_list.append(i)
-					# filte_array[i] = 0
 		if pred_box_tensor is not None:
 			for idx in ego_list:
 				pred_box_np[idx] = 0
@@ -3529,13 +2648,6 @@ def visualize(infer_result, pcd, pc_range, save_path, method='3d', left_hand=Fal
 
 				canvas_list.append(canvas)
 				
-				# plt.axis("off")
-				# plt.imshow(canvas.canvas)
-				# plt.tight_layout()
-				# plt.savefig(save_path, transparent=False, dpi=500)
-				# plt.clf()
-				# plt.close()
-
 				image_bev = np.transpose(canvas.canvas, axes=(1, 0, 2))
 				image_bev = np.flip(image_bev, axis=0)
 
@@ -3621,18 +2733,7 @@ def visualize(infer_result, pcd, pc_range, save_path, method='3d', left_hand=Fal
 					color = (0,191,255) if islidar else (255,185,15)
 					canvas.draw_boxes(cav_box_np[i:i+1], colors=color, texts=text,box_line_thickness=6)
 
-			# plt.axis("off")
-
-			# plt.imshow(canvas.canvas) # (500,1000,3)
-			# plt.tight_layout()
-			# plt.savefig(save_path, transparent=False, dpi=500)
-			# plt.clf()
-			# plt.close()
 			return canvas.canvas
-
-
-
-
 		else:
 			raise(f"Not Completed for f{method} visualization.")
 
@@ -3656,8 +2757,3 @@ def visualize(infer_result, pcd, pc_range, save_path, method='3d', left_hand=Fal
 		plt.savefig(save_path, transparent=False, dpi=500)
 		plt.clf()
 		plt.close()
-
-
-if __name__ == "__main__":
-	comm = Comm_Client()
-	print(comm.judge_direction(1,0,0,0,0,0))

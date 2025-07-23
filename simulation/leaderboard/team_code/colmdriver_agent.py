@@ -6,19 +6,13 @@ import cv2
 import carla
 import numpy as np
 from PIL import Image
-import pdb
-import sys
 import yaml
-import os
-
 from typing import OrderedDict
 
-from codriving.utils.torch_helper import \
-        move_dict_data_to_device, build_dataloader
-from common.torch_helper import load_checkpoint as load_planning_model_checkpoint
+from codriving import CODRIVING_REGISTRY
+from codriving.models.model_decoration import decorate_model
 
 from team_code.utils.carla_birdeye_view import BirdViewProducer, BirdViewCropType, PixelDimensions
-# from team_code.pnp_vlm_intention_action_speed_level_comm_v2v import PnP_infer
 from team_code.planner_pnp import RoutePlanner
 import team_code.utils.yaml_utils as yaml_utils
 
@@ -32,11 +26,10 @@ from opencood.tools.train_utils import create_model as create_perception_model
 from opencood.tools.train_utils import load_saved_model as load_perception_model
 from opencood.data_utils.datasets import build_dataset
 
+from common.torch_helper import load_checkpoint as load_planning_model_checkpoint
 from common.registry import build_object_within_registry_from_config as build_planning_model
 from common.io import load_config_from_yaml
 
-from codriving import CODRIVING_REGISTRY
-from codriving.models.model_decoration import decorate_model
 
 def get_entry_point():
     return "PnP_Agent"
@@ -155,21 +148,12 @@ class PnP_Agent(autonomous_agent.AutonomousAgent):
         self.planning_model = planning_model
 
         # core module, infer the action from sensor data
-        if self.config['planning']['core_method'] == 'MotionNet':
-            self.infer = PnP_infer(config=self.config,
-                                ego_vehicles_num=self.ego_vehicles_num,
-                                perception_model=self.perception_model,
-                                planning_model=planning_model,
-                                perception_dataloader=perception_dataloader,
-                                device=device)
-        elif self.config['planning']['core_method'] == 'rule_based':
-            self.infer = rule_infer(config=self.config,
-                                ego_vehicles_num=self.ego_vehicles_num,
-                                perception_model=self.perception_model,
-                                planning_model=planning_model,
-                                perception_dataloader=perception_dataloader,
-                                device=device)
-        
+        self.infer = PnP_infer(config=self.config,
+                            ego_vehicles_num=self.ego_vehicles_num,
+                            perception_model=self.perception_model,
+                            planning_model=planning_model,
+                            perception_dataloader=perception_dataloader,
+                            device=device)
 
 
     def _init(self):
@@ -481,17 +465,10 @@ class PnP_Agent(autonomous_agent.AutonomousAgent):
 
         control_all = []
 
-        if self.config['planning']['core_method'] == 'MotionNet':
-            control_all = self.infer.get_action_from_list_multi_vehicle(car_data_raw=ego_data,
-                                                            rsu_data_raw=rsu_data,
-                                                            step=self.step,
-                                                            timestamp=timestamp)
-        elif self.config['planning']['core_method'] == 'rule_based':
-            control_all = self.infer.get_action_from_list_inter(car_data_raw=ego_data,
-                                                            rsu_data_raw=rsu_data,
-                                                            step=self.step,
-                                                            timestamp=timestamp)
-
+        control_all = self.infer.get_action_from_list_multi_vehicle(car_data_raw=ego_data,
+                                                        rsu_data_raw=rsu_data,
+                                                        step=self.step,
+                                                        timestamp=timestamp)
 
         ### return the control signal in list format.
         return control_all

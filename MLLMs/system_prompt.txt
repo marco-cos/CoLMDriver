@@ -15,11 +15,11 @@ Suppose you are an autopilot assistant driving a car on the road. You will recei
 6. When establishing communication with other vehicles, take the communication decision as important reference.
 
 ### Perception Results
--pr-
+{pr}
 ### Real-time Inputs
 Communication suggestion: No interaction now
-Target direction: -nvins-
-Current Speed: -speed- m/s
+Target direction: {nvins}
+Current Speed: {speed} m/s
 
 ### Output Requirements
 Provide the speed intention, include STOP, FASTER, SLOWER, KEEP.
