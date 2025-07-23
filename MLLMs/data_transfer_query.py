@@ -99,33 +99,33 @@ data = []
 intention_count = [0,0,0,0]  # [0, 0, 0, 0, 0]
 # count_max = [15000, 28000, 17000] # [10000, 20000, 15000, 4680, 4520]
 for k, scene in enumerate(dataset):
-    # # perception
-    # if math.isnan(scene['self_theta']): continue
-    # perc = [[], [], []]
-    # for actor in scene['surrounding vehicles']:
-    #     local_x, local_y = global_to_local(scene['self_x'], scene['self_y'], scene['self_theta'], actor['x'], actor['y'])
-    #     if local_x < -12 or local_x > 12 or local_y < -12 or local_y > 36:
-    #         continue
-    #     perc_i = 0 if actor['type']==0 else 1 if actor['type']==1 else 2
-    #     perc[perc_i].append([local_x, local_y])
+    # perception
+    if math.isnan(scene['self_theta']): continue
+    perc = [[], [], []]
+    for actor in scene['surrounding vehicles']:
+        local_x, local_y = global_to_local(scene['self_x'], scene['self_y'], scene['self_theta'], actor['x'], actor['y'])
+        if local_x < -12 or local_x > 12 or local_y < -12 or local_y > 36:
+            continue
+        perc_i = 0 if actor['type']==0 else 1 if actor['type']==1 else 2
+        perc[perc_i].append([local_x, local_y])
     
-    # # perception_str = 'Perceived Car: [-car-]\nPerceived People: [-people-]\nPerceived Bike: [-bike-]'
-    # # perception_str = f'There are {len(perc[0])} car and {len(perc[1])} people near the front of the car. '
-    # # replace_list = ['-car-', '-people-', '-bike-']
-    # # for k in range(3):
-    # #     perc_str = ''
-    # #     for i, p in enumerate(perc[k]):
-    # #         perc_str = perc_str + f'{round(p[0], 2)}, {round(p[1], 2)}; '
-    # #     perception_str = perception_str.replace(replace_list[k], perc_str.rstrip('; '))
-    # perception_str = ''
+    # perception_str = 'Perceived Car: [-car-]\nPerceived People: [-people-]\nPerceived Bike: [-bike-]'
+    # perception_str = f'There are {len(perc[0])} car and {len(perc[1])} people near the front of the car. '
+    # replace_list = ['-car-', '-people-', '-bike-']
     # for k in range(3):
-    #     veh_type = 'Car' if k==0 else 'Pedestrian' if k==1 else 'Bike'
+    #     perc_str = ''
     #     for i, p in enumerate(perc[k]):
-    #         if p[0]>0: lr = 'left'
-    #         else: lr = 'right'
-    #         if p[1]>0: fb = 'forward'
-    #         else: fb = 'backward'
-    #         perception_str = perception_str + f'{veh_type} {i+1}, {abs(int(p[1]))} meters {fb} and {abs(int(p[0]))} meters to the {lr};\n'
+    #         perc_str = perc_str + f'{round(p[0], 2)}, {round(p[1], 2)}; '
+    #     perception_str = perception_str.replace(replace_list[k], perc_str.rstrip('; '))
+    perception_str = ''
+    for k in range(3):
+        veh_type = 'Car' if k==0 else 'Pedestrian' if k==1 else 'Bike'
+        for i, p in enumerate(perc[k]):
+            if p[0]>0: lr = 'left'
+            else: lr = 'right'
+            if p[1]>0: fb = 'forward'
+            else: fb = 'backward'
+            perception_str = perception_str + f'{veh_type} {i+1}, {abs(int(p[1]))} meters {fb} and {abs(int(p[0]))} meters to the {lr};\n'
 
     sample = {}
     q = system.replace('-nvins-', scene['direction intention'])
