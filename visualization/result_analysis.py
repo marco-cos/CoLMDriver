@@ -42,6 +42,7 @@ if __name__ == '__main__':
         for route in route_id_bank_list:
             reported_route_id = []
             file_path = []
+            # route = 'Interdrive_no_npc_' + route
             route_dir = os.path.join(root_path, route)
             ego_num = 0
 
@@ -64,66 +65,56 @@ if __name__ == '__main__':
                     original_record.append(fcc_data[i]["_checkpoint"]["records"])
 
                 records = []
-                records = original_record[0]
+                # records = original_record[0]
+                import copy
+                record = copy.deepcopy(original_record[0][0])
 
-                for i in range(len(original_record[0])):
-                    records[i]['scores']['score_route'] = sum(original_record[j][i]['scores']['score_route'] for j in range(ego_num)) / ego_num
-                    records[i]['scores']['score_penalty'] = 1
-                    for j in range(ego_num):
-                        records[i]['scores']['score_penalty'] *= original_record[j][i]['scores']['score_penalty']
-                    records[i]['scores']['score_composed'] = records[i]['scores']['score_route'] * records[i]['scores']['score_penalty']
+                record['scores']['score_route'] = sum(original_record[j][0]['scores']['score_route'] for j in range(ego_num)) / ego_num
+                record['scores']['score_penalty'] = 1
+                for j in range(ego_num):
+                    record['scores']['score_penalty'] *= original_record[j][0]['scores']['score_penalty']
+                record['scores']['score_composed'] = record['scores']['score_route'] * record['scores']['score_penalty']
 
-                for record in records:
-                    red_light = len(record['infractions']['red_light'])
-                    stop_sign = len(record['infractions']['stop_infraction'])
-                    red_light_penalty = 1
-                    stop_sign_penalty = 1
-                    for i in range(red_light):
-                        red_light_penalty *= 0.7
-                    for i in range(stop_sign):
-                        stop_sign_penalty *= 0.8
-                    red_light_penalty *= stop_sign_penalty
+                if len(args)>1:
+                    print('{}\t{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}'.format(route, record['scores']['score_route'], record['scores']['score_penalty'], record['scores']['score_composed'], record['meta']['duration_game'], record['meta']['duration_system']))
+                reported_route_id.append(route)
 
-                    if len(args)>1:
-                        print('{}\t{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}\t{:.3f}'.format(route, record['scores']['score_route'], record['scores']['score_penalty']/red_light_penalty, record['scores']['score_composed']/red_light_penalty, record['meta']['duration_game'], record['meta']['duration_system']))
-                    reported_route_id.append(route)
-
-                    save_as_excel.append([
-                        route, record['scores']['score_route'], record['scores']['score_penalty']/red_light_penalty, record['scores']['score_composed']/red_light_penalty,
-                        record['meta']['duration_game'], record['meta']['duration_system']
-                        ])
-                    analysis['score_route'][0] += record['scores']['score_route']
-                    analysis['score_penalty'][0] += record['scores']['score_penalty']/red_light_penalty
-                    analysis['score_composed'][0] += record['scores']['score_composed']/red_light_penalty
-                    analysis['game_time'][0] += record['meta']['duration_game']
-                    if record['scores']['score_composed']/red_light_penalty > 99.95:
-                        analysis['success_rate'][0] += 1
-                    if 'ins_ss' in route or 'ins_sl' in route or 'ins_oppo' in route or 'ins_chaos' in route:
-                        analysis['score_route'][1] += record['scores']['score_route']
-                        analysis['score_penalty'][1] += record['scores']['score_penalty']/red_light_penalty
-                        analysis['score_composed'][1] += record['scores']['score_composed']/red_light_penalty
-                        analysis['game_time'][1] += record['meta']['duration_game']
-                        if record['scores']['score_composed']/red_light_penalty > 99.95:
-                            analysis['success_rate'][1] += 1
-                        cnt[0] += 1
-                    elif 'ins_sr' in route or 'ins_c' in route or 'ins_rl' in route or 'hw_merge' in route:
-                        analysis['score_route'][2] += record['scores']['score_route']
-                        analysis['score_penalty'][2] += record['scores']['score_penalty']/red_light_penalty
-                        analysis['score_composed'][2] += record['scores']['score_composed']/red_light_penalty
-                        analysis['game_time'][2] += record['meta']['duration_game']
-                        if record['scores']['score_composed']/red_light_penalty > 99.95:
-                            analysis['success_rate'][2] += 1
-                        cnt[1] += 1
-                    elif 'crosschange' in route or 'hw_c' in route:
-                        analysis['score_route'][3] += record['scores']['score_route']
-                        analysis['score_penalty'][3] += record['scores']['score_penalty']/red_light_penalty
-                        analysis['score_composed'][3] += record['scores']['score_composed']/red_light_penalty
-                        analysis['game_time'][3] += record['meta']['duration_game']
-                        if record['scores']['score_composed']/red_light_penalty > 99.95:
-                            analysis['success_rate'][3] += 1
-                        cnt[2] += 1
-                    else:
-                        print('error')
+                save_as_excel.append([
+                    route, record['scores']['score_route'], record['scores']['score_penalty'], record['scores']['score_composed'],
+                    record['meta']['duration_game'], record['meta']['duration_system']
+                    ])
+                analysis['score_route'][0] += record['scores']['score_route']
+                analysis['score_penalty'][0] += record['scores']['score_penalty']
+                analysis['score_composed'][0] += record['scores']['score_composed']
+                analysis['game_time'][0] += record['meta']['duration_game']
+                if record['scores']['score_composed'] > 99.95:
+                    analysis['success_rate'][0] += 1
+                if 'ins_ss' in route or 'ins_sl' in route or 'ins_oppo' in route or 'ins_chaos' in route:
+                    analysis['score_route'][1] += record['scores']['score_route']
+                    analysis['score_penalty'][1] += record['scores']['score_penalty']
+                    analysis['score_composed'][1] += record['scores']['score_composed']
+                    analysis['game_time'][1] += record['meta']['duration_game']
+                    if record['scores']['score_composed'] > 99.95:
+                        analysis['success_rate'][1] += 1
+                    cnt[0] += 1
+                elif 'crosschange' in route or 'hw_c' in route:
+                    analysis['score_route'][3] += record['scores']['score_route']
+                    analysis['score_penalty'][3] += record['scores']['score_penalty']
+                    analysis['score_composed'][3] += record['scores']['score_composed']
+                    analysis['game_time'][3] += record['meta']['duration_game']
+                    if record['scores']['score_composed'] > 99.95:
+                        analysis['success_rate'][3] += 1
+                    cnt[2] += 1
+                elif 'ins_sr' in route or 'ins_c' in route or 'ins_rl' in route or 'hw_merge' in route:
+                    analysis['score_route'][2] += record['scores']['score_route']
+                    analysis['score_penalty'][2] += record['scores']['score_penalty']
+                    analysis['score_composed'][2] += record['scores']['score_composed']
+                    analysis['game_time'][2] += record['meta']['duration_game']
+                    if record['scores']['score_composed'] > 99.95:
+                        analysis['success_rate'][2] += 1
+                    cnt[1] += 1
+                else:
+                    print('error')
                         
             except Exception as e:
                 print(e)
