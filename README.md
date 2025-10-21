@@ -101,6 +101,10 @@ cd ..
 
 **Step 2:** Running VLM, LLM
 ```Shell
+#Enter Conda if in TMUX:
+source ~/.conda/etc/profile.d/conda.sh
+
+#Enter conda ENV
 conda activate vllm
 # VLM on call
 CUDA_VISIBLE_DEVICES=6 vllm serve ckpt/colmdriver/VLM --port 1111 --max-model-len 8192 --trust-remote-code --enable-prefix-caching
@@ -112,6 +116,10 @@ Note: make sure that the selected ports (1111,8888) are not occupied by other se
 
 **Step 3:** Run CARLA, run CoLMDriver
 ```Shell
+#Enter Conda if in TMUX:
+source ~/.conda/etc/profile.d/conda.sh
+
+#Enter Conda ENV
 conda activate colmdriver
 
 # Start CARLA server, if port 2000 is already in use, choose another

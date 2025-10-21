@@ -700,26 +700,55 @@ def main():
     check_result = False
 
     if arguments.skip_existed:
-        if os.path.exists(os.path.join(os.path.dirname(arguments.checkpoint), "ego_vehicle_{}".format(0), os.path.basename(arguments.checkpoint))):
+        expected_checkpoint = os.path.join(
+            os.path.dirname(arguments.checkpoint),
+            "ego_vehicle_{}".format(0),
+            os.path.basename(arguments.checkpoint),
+        )
+        # Safeguard the rerun logic: Only inspect existing runs when the expected checkpoint is present.
+        if os.path.exists(expected_checkpoint):
             image_save_path = os.environ['SAVE_PATH']
-            route_list = os.listdir(image_save_path)
-            route_list.sort()
-            log_dir = route_list[-1]
-            log_file_path = "{}/{}/log/log.log".format(image_save_path, log_dir)
-            
-            for invalid_str in ['Traceback','No space']:
-                if check_log_file(log_file_path, invalid_str):
-                    check_result = True
-                    break
+            if os.path.isdir(image_save_path):
+                route_list = [
+                    entry for entry in os.listdir(image_save_path)
+                    if os.path.isdir(os.path.join(image_save_path, entry))
+                ]
+                route_list.sort()
 
-            if not check_log_file(log_file_path, 'RouteCompletionTest'):
-                check_result = True
+                rerun_required = False
+                for log_dir in reversed(route_list):
+                    log_file_path = "{}/{}/log/log.log".format(image_save_path, log_dir)
+                    if not os.path.isfile(log_file_path):
+                        continue
 
-            if check_result:
-                print('Invalid results, rerun!')
+                    for invalid_str in ['Traceback', 'No space']:
+                        if check_log_file(log_file_path, invalid_str):
+                            rerun_required = True
+                            break
+
+                    if not rerun_required and not check_log_file(log_file_path, 'RouteCompletionTest'):
+                        rerun_required = True
+
+                    if rerun_required:
+                        print('Invalid results in {}, rerun!'.format(log_dir))
+                        break
+                    else:
+                        print('Valid results in {}, skip!'.format(log_dir))
+                        return
+
+                if not route_list:
+                    print('No previous results found, rerunning!')
+                    rerun_required = True
+                elif not rerun_required:
+                    print('No valid logs found to verify, rerunning!')
+                if rerun_required:
+                    print('Proceeding with rerun.')
+                else:
+                    print('No rerun required, continuing with evaluation.')
+                    return
+
             else:
-                print('Valid results, skip!')
-                return
+                print('{} is empty, rerunning!'.format(image_save_path))
         else:
             print('{} do not exists, continue!'.format(os.path.join(os.path.dirname(arguments.checkpoint), "ego_vehicle_{}".format(0), os.path.basename(arguments.checkpoint))))
 

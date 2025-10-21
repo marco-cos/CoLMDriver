@@ -940,20 +940,42 @@ class PnP_infer():
 				local_comm_content.append({'id': car_id, 'message': message})
 			# critic
 			print('\ncritic')
+			#Fixes bug with numbers being printed after "critic", causing crash
+			retry_attempt = 0
+			max_retries = 3
+			fallback_used = False
 			while True:
 				try:
 					action_list, sum_action_time = self.comm_client.sum_action(local_comm_content[-len(group):])
+					expected_ids = {str(item['ego_id']) for item in comm_info_list}
+					missing_ids = [ego_id for ego_id in expected_ids if ego_id not in action_list]
+					if missing_ids:
+						fallback_used = True
+						print(f"[WARN] Missing actions for vehicles {missing_ids}. Applying KEEP fallback.")
+						for ego_id in missing_ids:
+							action_list[ego_id] = {'speed': 'KEEP'}
 					for item in comm_info_list:
 						action_list[str(item['ego_id'])]['nav'] = item['ego_intention']
 						if action_list[str(item['ego_id'])]['speed'] == 'KEEP' and item['ego_speed'] < 4:
 							action_list[str(item['ego_id'])]['speed'] = 'FASTER'
-						# check key 'nav' in action_list[value], if nav not in action_list[value], remove action_list[value]
+					# check key 'nav' in action_list[value], if nav not in action_list[value], remove action_list[value]
 					keys_to_remove = [key for key, value in action_list.items() if 'nav' not in value]
 					for key in keys_to_remove:
 						del action_list[key]
 					break
 				except Exception as e:
-					print(e)
+					retry_attempt += 1
+					print(f"[WARN] sum_action attempt {retry_attempt}/{max_retries} failed with error: {e}")
+					if retry_attempt >= max_retries:
+						expected_ids = {str(item['ego_id']) for item in comm_info_list}
+						action_list = {ego_id: {'speed': 'KEEP'} for ego_id in expected_ids}
+						sum_action_time = 0
+						fallback_used = True
+						print("[WARN] sum_action retries exhausted. Using KEEP fallback for all vehicles.")
+						break
+					time.sleep(0.1)
+			if fallback_used:
+				print(f"[INFO] Fallback action list used: {action_list}")
 			print('action_list: ', action_list)
 			if self.realtime:
 				print(f"round {k} sum action time {sum_action_time}")
