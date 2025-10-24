@@ -140,10 +140,102 @@ bash scripts/eval/eval_mode.sh 0 2000 colmdriver ideal Interdrive_no_npc
 bash scripts/eval/eval_mode.sh 0 2000 colmdriver ideal Interdrive_npc
 ```
 
-The results will be saved at `results/results_driving_colmdriver`, to summarize the results, use:
+The results will be saved at `results/results_driving_colmdriver`. To analyze and visualize the results:
+
+### Results Analysis
+
+The repository includes a comprehensive results analysis script that generates detailed reports, visualizations, and statistics about driving performance and negotiation behavior.
+
+#### Basic Usage
+
 ```Shell
-python visualization/result_analysis.py results/results_driving_colmdriver
+# Basic analysis of results directory
+python visualization/results_analysis.py results/results_driving_colmdriver --output-dir report
+
+# Multiple experiment folders
+python visualization/results_analysis.py results/results_driving_colmdriver exp1 exp2 --output-dir report
+
+# Generate single markdown report for multiple experiments
+python visualization/results_analysis.py results/results_driving_colmdriver exp1 exp2 --output-dir report --markdown report/combined.md
 ```
+
+#### Generated Analysis
+
+The script generates:
+
+- **Markdown Report**: Comprehensive analysis with embedded figures
+- **CSV Data Tables**:
+  - Per-route summary
+  - Category summaries 
+  - Negotiation statistics
+  - Infractions breakdown
+- **Visualizations**:
+  - Driving scores by scenario category
+  - Success rates across traffic conditions
+  - NPC impact analysis
+  - Negotiation frequency and rounds distribution
+  - Agent count distribution
+  - Score distributions
+  - Infractions breakdown
+
+#### Key Metrics Analyzed
+
+- Driving Score (DS) and Success Rate
+- Route Categories (IC/LM/LC) performance
+- Impact of NPC traffic
+- Negotiation behavior:
+  - Frequency
+  - Number of rounds
+  - Consensus scores
+  - Safety scores
+- Agent counts and interactions
+- Infractions breakdown
+
+The analysis helps understand:
+- How different traffic conditions affect performance
+- Which scenarios trigger most negotiations
+- How negotiation patterns vary across scenarios
+- Where driving performance needs improvement
+
+### Visualizing Results
+
+The repository provides tools to generate videos from evaluation results:
+
+```Shell
+# Generate video for a specific scenario
+python visualization/gen_video.py path/to/scenario/folder --output scenario.mp4
+
+# Options:
+--fps VALUE           Set video framerate (default: 10)
+--width VALUE         Set output width in pixels
+--height VALUE        Set output height in pixels
+--font-scale VALUE    Adjust text overlay size
+--min-hold VALUE     Minimum seconds to show overlay text
+
+# Examples:
+# Basic video with default settings
+python visualization/gen_video.py results/results_driving_colmdriver/route_00/0000 --output route00_test.mp4
+
+# High quality render with custom settings
+python visualization/gen_video.py results/results_driving_colmdriver/route_00/0000 \
+    --output route00_hq.mp4 \
+    --fps 30 \
+    --width 1920 \
+    --height 1080 \
+    --font-scale 1.2
+
+# Process multiple scenarios
+python visualization/gen_video.py results/results_driving_colmdriver/route_*/0000 \
+    --output-dir videos/
+```
+
+Features:
+- Multi-vehicle perspective rendering
+- Negotiation overlay visualization
+- Configurable resolution and framerate
+- Automatic scenario discovery
+- Progress tracking
+- Font size and text display customization
 
 It's recommended to run LLM/VLM/CARLA_server/CoLMDriver_evaluation in 4 distinct terminals.
 
