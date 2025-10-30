@@ -3,12 +3,14 @@ import csv
 import json
 import math
 import os
+import shutil
 import statistics
 import sys
 import textwrap
 from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import matplotlib
 
@@ -16,6 +18,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 import numpy as np
+import pandas as pd
+import seaborn as sns
 from tabulate import tabulate
 
 
@@ -31,6 +35,59 @@ ROUTE_PREFIXES = {
 }
 MODE_ORDER = {"No NPC": 0, "NPC": 1}
 
+BASE_TYPE_LABELS: Dict[str, str] = {
+    "hw": "Highway",
+    "ins": "Intersection",
+}
+
+SCENARIO_DESCRIPTIONS: Dict[Tuple[str, str], str] = {
+    ("ins", "ss"): "Cross: Straight-Straight",
+    ("ins", "sl"): "Cross: Straight-Left",
+    ("ins", "sr"): "Cross: Straight-Right",
+    ("ins", "oppo"): "Cross: Opposite Lane",
+    ("ins", "chaos"): "Cross: Chaos",
+    ("ins", "crosschange"): "Change: Right-Straight",
+    ("ins", "c"): "Change: Right-Straight",
+    ("ins", "rl"): "Change: Right-Left",
+    ("hw", "merge"): "Merge: Neighbor Lane",
+    ("hw", "c"): "Change: Highway",
+}
+
+_ROUTE_AGENT_SPEC = (
+    '("r1_town05_ins_c:2" "r2_town05_ins_c:2" "r3_town05_ins_c:2" '
+    '"r4_town06_ins_c:2" "r5_town06_ins_c:2" "r6_town07_ins_c:2" '
+    '"r7_town05_ins_ss:2" "r8_town05_ins_ss:2" "r9_town06_ins_ss:2" '
+    '"r10_town07_ins_ss:2" "r11_town05_ins_sl:2" "r12_town06_ins_sl:2" '
+    '"r13_town05_ins_sl:2" "r14_town07_ins_sl:2" "r15_town07_ins_sl:2" '
+    '"r16_town05_ins_sl:2" "r17_town05_ins_sr:2" "r18_town05_ins_sr:2" '
+    '"r19_town05_ins_sr:2" "r20_town06_ins_sr:2" "r21_town07_ins_sr:2" '
+    '"r22_town07_ins_sr:2" "r23_town05_ins_oppo:3" "r24_town05_ins_rl:3" '
+    '"r25_town05_ins_crosschange:3" "r26_town05_ins_chaos:6" '
+    '"r27_town06_hw_merge:3" "r28_town06_hw_c:6" "r29_town06_hw_merge:4" '
+    '"r30_town06_hw_merge:4" "r31_town05_ins_oppo:4" "r32_town05_ins_oppo:4" '
+    '"r33_town05_ins_rl:4" "r34_town05_ins_rl:4" "r35_town05_ins_crosschange:4" '
+    '"r36_town05_ins_crosschange:4" "r37_town05_ins_chaos:8" '
+    '"r38_town05_ins_chaos:8" "r39_town06_hw_c:8" "r40_town06_hw_c:8" '
+    '"r41_town05_ins_oppo:4" "r42_town05_ins_rl:4" "r43_town05_ins_crosschange:4" '
+    '"r44_town05_ins_chaos:8" "r45_town06_hw_merge:4" "r46_town06_hw_c:7")'
+)
+
+
+def parse_route_agent_map(spec: str) -> Dict[str, int]:
+    mapping: Dict[str, int] = {}
+    tokens = spec.replace("(", "").replace(")", "").replace('"', "").split()
+    for token in tokens:
+        if ":" not in token:
+            continue
+        route, count = token.split(":", 1)
+        if not count.isdigit():
+            continue
+        mapping[route] = int(count)
+    return mapping
+
+
+ROUTE_AGENT_MAP = parse_route_agent_map(_ROUTE_AGENT_SPEC)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -42,6 +99,441 @@ def safe_load_json(path: str):
             return json.load(f)
     except Exception:
         return None
+
+
+def scenario_type_label(base_type: str, sub_type: str) -> str:
+    base_label = BASE_TYPE_LABELS.get(base_type, base_type.title() if base_type else "Unknown")
+    description = SCENARIO_DESCRIPTIONS.get((base_type, sub_type))
+    if not description:
+        description = sub_type.replace("_", " ").title() if sub_type else base_label
+    if description.lower().startswith(base_label.lower()):
+        return description
+    return f"{base_label} - {description}"
+
+
+def scenario_bar_label(route_id: str, agent_count: Optional[int], base_type: str, sub_type: str) -> str:
+    parts = route_id.split("_")
+    route_code = parts[0] if parts else route_id
+    town = parts[1] if len(parts) > 1 else ""
+    type_label = scenario_type_label(base_type, sub_type)
+    town_segment = f"{town} - " if town else ""
+    agents_text = f"{agent_count} agents" if agent_count is not None else "agents: n/a"
+    return f"{route_code} ({agents_text})\n{town_segment}{type_label}"
+
+
+@dataclass
+class ScenarioMeta:
+    scenario_name: str
+    route_id: str
+    agent_count: Optional[int]
+    base_type: str
+    sub_type: str
+
+
+@dataclass(frozen=True)
+class NegotiationLogSource:
+    scenario_name: str
+    source: Path
+    source_count: int
+
+
+def derive_scenario_meta(scenario_name: str) -> ScenarioMeta:
+    try:
+        idx = scenario_name.index("_r")
+    except ValueError as exc:
+        raise ValueError(f"Scenario name not in expected format: {scenario_name}") from exc
+    route_id = scenario_name[idx + 1 :]
+    parts = route_id.split("_")
+    if len(parts) < 3:
+        raise ValueError(f"Route id does not contain expected parts: {route_id}")
+    base_type = parts[2]
+    sub_type = "_".join(parts[3:]) if len(parts) > 3 else ""
+    agent_count = ROUTE_AGENT_MAP.get(route_id)
+    return ScenarioMeta(
+        scenario_name=scenario_name,
+        route_id=route_id,
+        agent_count=agent_count,
+        base_type=base_type,
+        sub_type=sub_type,
+    )
+
+
+def iter_negotiations(data: Dict) -> Sequence[Tuple[str, str, int, Dict]]:
+    records = []
+    for stage_key, stage_val in data.items():
+        if stage_key == "action" or not isinstance(stage_val, dict):
+            continue
+        try:
+            timestamp = int(stage_key)
+        except ValueError:
+            timestamp = -1
+        for event_key, payload in stage_val.items():
+            if not isinstance(payload, dict):
+                continue
+            records.append((stage_key, event_key, timestamp, payload))
+    return records
+
+
+def extract_message_features(payload: Dict) -> Dict[str, Optional[float]]:
+    content = payload.get("content") or []
+    messages = [msg for msg in content if isinstance(msg, dict)]
+    texts = [msg.get("message", "") for msg in messages if isinstance(msg.get("message"), str)]
+    rounds = len(texts)
+    if rounds:
+        word_counts = [len(t.split()) for t in texts]
+        char_counts = [len(t) for t in texts]
+        avg_words = statistics.mean(word_counts)
+        avg_chars = statistics.mean(char_counts)
+    else:
+        avg_words = 0.0
+        avg_chars = 0.0
+    unique_agents = {
+        msg.get("id") for msg in messages if isinstance(msg.get("id"), (int, str))
+    }
+    return {
+        "communication_rounds": rounds,
+        "unique_speakers": len(unique_agents),
+        "avg_words_per_message": float(avg_words),
+        "avg_chars_per_message": float(avg_chars),
+        "speaker_ids": unique_agents,
+    }
+
+
+def negotiation_overall_statistics(df: pd.DataFrame) -> Dict[str, float]:
+    rounds = df["rounds"]
+    return {
+        "total_negotiations": int(len(rounds)),
+        "total_rounds": int(rounds.sum()),
+        "mean_rounds": float(rounds.mean()) if len(rounds) else 0.0,
+        "median_rounds": float(rounds.median()) if len(rounds) else 0.0,
+        "std_rounds": float(rounds.std(ddof=1)) if len(rounds) > 1 else 0.0,
+        "min_rounds": float(rounds.min()) if len(rounds) else 0.0,
+        "max_rounds": float(rounds.max()) if len(rounds) else 0.0,
+    }
+
+
+def negotiation_scenario_summary(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+    summary = (
+        df.groupby(
+            ["scenario", "route_id", "mode", "agent_count", "base_type", "sub_type", "scenario_type_label"],
+            dropna=False,
+        )
+        .agg(
+            negotiations=("rounds", "size"),
+            total_rounds=("rounds", "sum"),
+            mean_rounds=("rounds", "mean"),
+            median_rounds=("rounds", "median"),
+            std_rounds=("rounds", lambda x: x.std(ddof=1) if len(x) > 1 else 0.0),
+            min_rounds=("rounds", "min"),
+            max_rounds=("rounds", "max"),
+            avg_words=("avg_words_per_message", "mean"),
+            avg_chars=("avg_chars_per_message", "mean"),
+            suggestions=("suggestion", "sum"),
+        )
+        .reset_index()
+    )
+    summary["scenario_bar_label"] = summary.apply(
+        lambda row: scenario_bar_label(row["route_id"], row["agent_count"], row["base_type"], row["sub_type"]),
+        axis=1,
+    )
+    return summary
+
+
+def negotiation_group_summary(df: pd.DataFrame, group_field: str) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+    summary = (
+        df.groupby(group_field)
+        .agg(
+            negotiations=("rounds", "size"),
+            total_rounds=("rounds", "sum"),
+            mean_rounds=("rounds", "mean"),
+            median_rounds=("rounds", "median"),
+            std_rounds=("rounds", lambda x: x.std(ddof=1) if len(x) > 1 else 0.0),
+            min_rounds=("rounds", "min"),
+            max_rounds=("rounds", "max"),
+            avg_words=("avg_words_per_message", "mean"),
+            avg_chars=("avg_chars_per_message", "mean"),
+            suggestions=("suggestion", "sum"),
+        )
+        .reset_index()
+    )
+    return summary
+
+
+def negotiation_flavor_summary(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+    summary = (
+        df.groupby(["base_type", "sub_type", "scenario_type_label"])
+        .agg(
+            negotiations=("rounds", "size"),
+            total_rounds=("rounds", "sum"),
+            mean_rounds=("rounds", "mean"),
+            median_rounds=("rounds", "median"),
+            std_rounds=("rounds", lambda x: x.std(ddof=1) if len(x) > 1 else 0.0),
+            min_rounds=("rounds", "min"),
+            max_rounds=("rounds", "max"),
+            avg_words=("avg_words_per_message", "mean"),
+            avg_chars=("avg_chars_per_message", "mean"),
+            suggestions=("suggestion", "sum"),
+        )
+        .reset_index()
+        .sort_values(["base_type", "sub_type"])
+    )
+    return summary
+
+
+def save_negotiation_tables(
+    df: pd.DataFrame,
+    scenario_stats: pd.DataFrame,
+    agent_stats: pd.DataFrame,
+    base_stats: pd.DataFrame,
+    flavor_stats: pd.DataFrame,
+    tables_dir: Path,
+) -> Dict[str, Path]:
+    tables_dir.mkdir(parents=True, exist_ok=True)
+
+    outputs: Dict[str, Path] = {}
+
+    detailed_df = df.copy()
+    detailed_df.to_csv(tables_dir / "negotiations_detailed_full.csv", index=False)
+    outputs["detailed"] = tables_dir / "negotiations_detailed_full.csv"
+
+    scenario_stats.to_csv(tables_dir / "negotiations_scenario_summary.csv", index=False)
+    outputs["scenario"] = tables_dir / "negotiations_scenario_summary.csv"
+
+    agent_stats.to_csv(tables_dir / "negotiations_by_agent_count.csv", index=False)
+    outputs["agent"] = tables_dir / "negotiations_by_agent_count.csv"
+
+    base_stats.to_csv(tables_dir / "negotiations_by_base_type.csv", index=False)
+    outputs["base"] = tables_dir / "negotiations_by_base_type.csv"
+
+    flavor_stats.to_csv(tables_dir / "negotiations_by_setting.csv", index=False)
+    outputs["flavor"] = tables_dir / "negotiations_by_setting.csv"
+
+    return outputs
+
+
+def save_negotiation_figures(
+    df: pd.DataFrame,
+    scenario_stats: pd.DataFrame,
+    figures_dir: Path,
+) -> Dict[str, Path]:
+    figures_dir.mkdir(parents=True, exist_ok=True)
+
+    sns.set_theme(style="whitegrid")
+
+    figure_paths: Dict[str, Path] = {}
+
+    if not scenario_stats.empty:
+        ordered = scenario_stats.sort_values("mean_rounds", ascending=False)
+        fig1_height = max(10, 0.35 * len(ordered))
+        fig1, ax1 = plt.subplots(figsize=(14, fig1_height))
+        sns.barplot(
+            data=ordered,
+            y="scenario_bar_label",
+            x="mean_rounds",
+            color="#1f77b4",
+            ax=ax1,
+        )
+        ax1.set_title("Average Negotiation Rounds per Scenario")
+        ax1.set_xlabel("Average rounds")
+        ax1.set_ylabel("Scenario")
+        ax1.grid(axis="x", alpha=0.3)
+        max_rounds = ordered["mean_rounds"].max() if not ordered.empty else 0
+        ax1.set_xlim(0, max_rounds + 3)
+        for patch, mean_value, negotiations in zip(
+            ax1.patches, ordered["mean_rounds"], ordered["negotiations"]
+        ):
+            width = patch.get_width()
+            y = patch.get_y() + patch.get_height() / 2
+            ax1.text(
+                width + 0.3,
+                y,
+                f"{mean_value:.1f} avg\n{int(negotiations)} negotiations",
+                va="center",
+                fontsize=9,
+            )
+        fig1.tight_layout(rect=(0, 0.02, 1, 1))
+        path = figures_dir / "negotiations_avg_rounds_per_scenario.png"
+        fig1.savefig(path)
+        plt.close(fig1)
+        figure_paths["avg_rounds_per_scenario"] = path
+
+    if not df.empty:
+        fig2, ax2 = plt.subplots(figsize=(8, 6))
+        sns.boxplot(data=df, x="agent_count", y="rounds", ax=ax2)
+        sns.stripplot(
+            data=df,
+            x="agent_count",
+            y="rounds",
+            color="black",
+            alpha=0.4,
+            ax=ax2,
+            dodge=True,
+        )
+        ax2.set_title("Negotiation Rounds by Agent Count")
+        ax2.set_xlabel("Agent Count")
+        ax2.set_ylabel("Rounds")
+        fig2.tight_layout()
+        path = figures_dir / "negotiations_rounds_by_agent_count.png"
+        fig2.savefig(path)
+        plt.close(fig2)
+        figure_paths["rounds_by_agent_count"] = path
+
+        fig3, ax3 = plt.subplots(figsize=(12, 6))
+        order = (
+            df.groupby("scenario_type_label")["rounds"]
+            .mean()
+            .sort_values(ascending=False)
+            .index
+        )
+        sns.boxplot(
+            data=df,
+            x="scenario_type_label",
+            y="rounds",
+            order=order,
+            showfliers=False,
+            ax=ax3,
+        )
+        ax3.set_title("Negotiation Rounds by Scenario Setting")
+        ax3.set_xlabel("Scenario Setting")
+        ax3.set_ylabel("Rounds")
+        plt.setp(ax3.get_xticklabels(), rotation=45, ha="right")
+        fig3.tight_layout()
+        path = figures_dir / "negotiations_rounds_by_setting.png"
+        fig3.savefig(path)
+        plt.close(fig3)
+        figure_paths["rounds_by_setting"] = path
+
+        fig4, ax4 = plt.subplots(figsize=(8, 6))
+        sns.scatterplot(
+            data=scenario_stats,
+            x="agent_count",
+            y="mean_rounds",
+            hue="scenario_type_label",
+            size="negotiations",
+            sizes=(60, 360),
+            ax=ax4,
+        )
+        ax4.set_title("Average Rounds vs Agent Count")
+        ax4.set_xlabel("Agent Count")
+        ax4.set_ylabel("Average Rounds")
+        legend = ax4.legend(
+            bbox_to_anchor=(1.02, 1),
+            loc="upper left",
+            title="Scenario type\nMarker size = # negotiations",
+            borderaxespad=0,
+        )
+        if legend:
+            for text in legend.texts:
+                label = text.get_text()
+                if label.strip().isdigit():
+                    text.set_text(f"{label.strip()} negotiations")
+        fig4.tight_layout()
+        path = figures_dir / "negotiations_rounds_vs_agent_count.png"
+        fig4.savefig(path)
+        plt.close(fig4)
+        figure_paths["rounds_vs_agent_count"] = path
+
+    return figure_paths
+
+
+def negotiation_flavors_to_string(df: pd.DataFrame) -> str:
+    if df.empty:
+        return ""
+    display_df = df.copy()
+    columns = []
+    if "scenario_type_label" in display_df.columns:
+        columns.append("scenario_type_label")
+    columns.extend(col for col in ["base_type", "sub_type"] if col in display_df.columns)
+    stat_columns = [
+        "negotiations",
+        "total_rounds",
+        "mean_rounds",
+        "median_rounds",
+        "std_rounds",
+        "min_rounds",
+        "max_rounds",
+        "avg_words",
+        "avg_chars",
+        "suggestions",
+    ]
+    columns.extend(col for col in stat_columns if col in display_df.columns)
+    if columns:
+        display_df = display_df[columns]
+    return display_df.to_string(index=False)
+
+
+def render_negotiation_report(
+    overall_stats: Dict[str, float],
+    agent_stats: pd.DataFrame,
+    base_stats: pd.DataFrame,
+    flavor_stats: pd.DataFrame,
+) -> str:
+    lines = []
+    lines.append("=== Negotiation Overview ===")
+    lines.append(
+        textwrap.dedent(
+            f"""
+Total negotiations: {overall_stats.get('total_negotiations', 0)}
+Total rounds: {overall_stats.get('total_rounds', 0)}
+Mean rounds: {overall_stats.get('mean_rounds', 0.0):.2f}
+Median rounds: {overall_stats.get('median_rounds', 0.0):.2f}
+Std dev rounds: {overall_stats.get('std_rounds', 0.0):.2f}
+Min rounds: {overall_stats.get('min_rounds', 0.0):.0f}
+Max rounds: {overall_stats.get('max_rounds', 0.0):.0f}
+""".strip()
+        )
+    )
+    lines.append("")
+
+    if not agent_stats.empty:
+        lines.append("=== Breakdown by Agent Count ===")
+        lines.append(agent_stats.to_string(index=False))
+        lines.append("")
+
+    if not base_stats.empty:
+        base_display = base_stats.copy()
+        if "base_type" in base_display.columns:
+            base_display["base_label"] = base_display["base_type"].map(
+                lambda base: BASE_TYPE_LABELS.get(base, base.title())
+            )
+        base_columns = [
+            "base_label" if "base_label" in base_display.columns else "base_type",
+            "negotiations",
+            "total_rounds",
+            "mean_rounds",
+            "median_rounds",
+            "std_rounds",
+            "min_rounds",
+            "max_rounds",
+        ]
+        base_display = base_display[[col for col in base_columns if col in base_display.columns]]
+        lines.append("=== Breakdown by Base Scenario Type ===")
+        lines.append(base_display.to_string(index=False))
+        lines.append("")
+
+    if not flavor_stats.empty:
+        lines.append("=== Breakdown by Scenario Setting (base + subtype) ===")
+        lines.append(negotiation_flavors_to_string(flavor_stats))
+        legend_entries: List[str] = []
+        for (base, sub), desc in sorted(
+            SCENARIO_DESCRIPTIONS.items(), key=lambda item: (item[0][0], item[0][1])
+        ):
+            base_label = BASE_TYPE_LABELS.get(base, base.title())
+            entry = f"  {base_label} - {desc}"
+            if entry not in legend_entries:
+                legend_entries.append(entry)
+        if legend_entries:
+            lines.append("")
+            lines.append("Scenario Type Legend:")
+            lines.extend(legend_entries)
+
+    return "\n".join(lines).strip()
 
 
 def classify_route(route_name: str) -> str:
@@ -212,74 +704,68 @@ def aggregate_route_records(records):
 def load_negotiation_logs(base_path: str):
     stats: Dict[str, Dict] = {}
     detailed_records: List[Dict] = []
+    log_sources: List[NegotiationLogSource] = []
 
-    image_root = os.path.join(os.path.dirname(base_path), "image", os.path.basename(base_path))
-    candidate_roots = []
-    if os.path.isdir(image_root):
+    base_path_obj = Path(base_path)
+    image_root = base_path_obj.parent / "image" / base_path_obj.name
+    candidate_roots: List[Path] = []
+    if image_root.is_dir():
         candidate_roots.append(image_root)
 
-    legacy_logs = os.path.join(base_path, "collected_nego_logs")
-    if os.path.isdir(legacy_logs):
+    legacy_logs = base_path_obj / "collected_nego_logs"
+    if legacy_logs.is_dir():
         candidate_roots.append(legacy_logs)
 
     if not candidate_roots:
-        return stats, detailed_records
+        return stats, detailed_records, log_sources
 
-    def ingest(summary: Dict, negotiation: Dict, route_key: str, run_id: str, stage_key: str, event_key: str):
-        content = negotiation.get("content") or []
-        if not content:
-            return
-        rounds_len = len(content)
-        speakers = {
-            msg.get("id")
-            for msg in content
-            if isinstance(msg, dict) and msg.get("id") is not None
-        }
-        suggestion_flag = bool(negotiation.get("suggestion"))
-
-        summary["count"] += 1
-        summary["rounds"].append(rounds_len)
-        summary["suggestions"] += 1 if suggestion_flag else 0
-        summary["unique_speakers"].update(speakers)
-
-        for key, bucket in (
-            ("cons_score", "cons_scores"),
-            ("safety_score", "safety_scores"),
-            ("efficiency_score", "efficiency_scores"),
-            ("total_score", "total_scores"),
-            ("min_distance", "min_distances"),
-        ):
-            value = negotiation.get(key)
-            if isinstance(value, (int, float)):
-                summary[bucket].append(float(value))
-
-        detailed_records.append(
-            {
-                "route_id": route_key,
-                "run_id": run_id,
-                "stage": stage_key,
-                "event": event_key,
-                "rounds": rounds_len,
-                "unique_speakers": len(speakers),
-                "suggestion": suggestion_flag,
-                "cons_score": negotiation.get("cons_score"),
-                "safety_score": negotiation.get("safety_score"),
-                "efficiency_score": negotiation.get("efficiency_score"),
-                "total_score": negotiation.get("total_score"),
-                "min_distance": negotiation.get("min_distance"),
-            }
-        )
+    seen_scenarios: set[str] = set()
 
     for root in candidate_roots:
-        for entry in os.listdir(root):
-            if entry.startswith("."):
+        for entry in sorted(root.iterdir()):
+            if entry.name.startswith("."):
                 continue
 
-            route_path = os.path.join(root, entry)
-            route_key = entry[:-5] if entry.endswith(".json") else entry
+            scenario_name = entry.stem if entry.is_file() and entry.suffix == ".json" else entry.name
+            if scenario_name in seen_scenarios:
+                continue
+            seen_scenarios.add(scenario_name)
+
+            try:
+                meta = derive_scenario_meta(scenario_name)
+            except ValueError:
+                meta = ScenarioMeta(
+                    scenario_name=scenario_name,
+                    route_id=scenario_name,
+                    agent_count=None,
+                    base_type="",
+                    sub_type="",
+                )
+
+            run_logs: List[Tuple[str, Path]] = []
+            if entry.is_dir():
+                for run_dir in sorted(entry.iterdir()):
+                    log_path = run_dir / "log" / "nego.json"
+                    if log_path.is_file():
+                        run_logs.append((run_dir.name, log_path))
+            elif entry.suffix == ".json":
+                run_logs.append(("", entry))
+
+            if not run_logs:
+                continue
+
+            selected_source = run_logs[-1][1]
+            mode_label = "No NPC" if scenario_name.startswith("Interdrive_no_npc_") else "NPC"
+            log_sources.append(
+                NegotiationLogSource(
+                    scenario_name=scenario_name,
+                    source=selected_source,
+                    source_count=len(run_logs),
+                )
+            )
 
             summary = stats.setdefault(
-                route_key,
+                scenario_name,
                 {
                     "count": 0,
                     "rounds": [],
@@ -290,33 +776,74 @@ def load_negotiation_logs(base_path: str):
                     "efficiency_scores": [],
                     "total_scores": [],
                     "min_distances": [],
+                    "avg_words": [],
+                    "avg_chars": [],
+                    "base_type": meta.base_type,
+                    "sub_type": meta.sub_type,
+                    "mode": mode_label,
+                    "agent_count": meta.agent_count,
+                    "route_id": meta.route_id,
+                    "scenario_type_label": scenario_type_label(meta.base_type, meta.sub_type),
+                    "scenario_bar_label": scenario_bar_label(
+                        meta.route_id, meta.agent_count, meta.base_type, meta.sub_type
+                    ),
                 },
             )
 
-            if os.path.isdir(route_path) and not entry.endswith(".json"):
-                for run_dir in sorted(os.listdir(route_path)):
-                    log_path = os.path.join(route_path, run_dir, "log", "nego.json")
-                    if not os.path.isfile(log_path):
-                        continue
-                    data = safe_load_json(log_path)
-                    if not data:
-                        continue
-                    for stage_key, stage_val in data.items():
-                        if stage_key == "action" or not isinstance(stage_val, dict):
-                            continue
-                        for event_key, negotiation in stage_val.items():
-                            if isinstance(negotiation, dict):
-                                ingest(summary, negotiation, route_key, run_dir, stage_key, event_key)
-            elif entry.endswith(".json"):
-                data = safe_load_json(route_path)
+            for run_id, log_path in run_logs:
+                data = safe_load_json(log_path)
                 if not data:
                     continue
-                for stage_key, stage_val in data.items():
-                    if stage_key == "action" or not isinstance(stage_val, dict):
+                for stage_key, event_key, timestamp, payload in iter_negotiations(data):
+                    features = extract_message_features(payload)
+                    if features["communication_rounds"] <= 0:
                         continue
-                    for event_key, negotiation in stage_val.items():
-                        if isinstance(negotiation, dict):
-                            ingest(summary, negotiation, route_key, "", stage_key, event_key)
+                    suggestion_flag = payload.get("suggestion") is not None
+
+                    summary["count"] += 1
+                    summary["rounds"].append(features["communication_rounds"])
+                    summary["suggestions"] += 1 if suggestion_flag else 0
+                    summary["unique_speakers"].update(features["speaker_ids"])
+                    summary["avg_words"].append(features["avg_words_per_message"])
+                    summary["avg_chars"].append(features["avg_chars_per_message"])
+
+                    for key, bucket in (
+                        ("cons_score", "cons_scores"),
+                        ("safety_score", "safety_scores"),
+                        ("efficiency_score", "efficiency_scores"),
+                        ("total_score", "total_scores"),
+                        ("min_distance", "min_distances"),
+                    ):
+                        value = payload.get(key)
+                        if isinstance(value, (int, float)):
+                            summary[bucket].append(float(value))
+
+                    detailed_records.append(
+                        {
+                            "scenario": scenario_name,
+                            "route_id": meta.route_id,
+                            "mode": "No NPC" if scenario_name.startswith("Interdrive_no_npc_") else "NPC",
+                            "run_id": run_id,
+                            "stage": stage_key,
+                            "event": event_key,
+                            "timestamp": timestamp,
+                            "pair_key": event_key,
+                            "rounds": features["communication_rounds"],
+                            "unique_speakers": features["unique_speakers"],
+                            "avg_words_per_message": features["avg_words_per_message"],
+                            "avg_chars_per_message": features["avg_chars_per_message"],
+                            "suggestion": suggestion_flag,
+                            "cons_score": payload.get("cons_score"),
+                            "safety_score": payload.get("safety_score"),
+                            "efficiency_score": payload.get("efficiency_score"),
+                            "total_score": payload.get("total_score"),
+                            "min_distance": payload.get("min_distance"),
+                            "base_type": meta.base_type,
+                            "sub_type": meta.sub_type,
+                            "scenario_type_label": scenario_type_label(meta.base_type, meta.sub_type),
+                            "agent_count": meta.agent_count,
+                        }
+                    )
 
     for route_key, summary in stats.items():
         rounds = summary["rounds"]
@@ -330,8 +857,10 @@ def load_negotiation_logs(base_path: str):
         summary["avg_efficiency"] = average(summary["efficiency_scores"])
         summary["avg_total_score"] = average(summary["total_scores"])
         summary["avg_min_distance"] = average(summary["min_distances"])
+        summary["avg_words_per_message"] = average(summary["avg_words"])
+        summary["avg_chars_per_message"] = average(summary["avg_chars"])
 
-    return stats, detailed_records
+    return stats, detailed_records, log_sources
 
 
 def analyze_results(main_path: str):
@@ -350,7 +879,7 @@ def analyze_results(main_path: str):
     unmatched_routes = []
     total_ego_runs = 0
     infraction_totals = defaultdict(int)
-    negotiation_stats, negotiation_records = load_negotiation_logs(main_path)
+    negotiation_stats, negotiation_records, negotiation_sources = load_negotiation_logs(main_path)
     negotiation_rounds_all: List[int] = []
     negotiation_cons_scores_all: List[float] = []
     negotiation_safety_scores_all: List[float] = []
@@ -412,6 +941,15 @@ def analyze_results(main_path: str):
         negotiation_avg_efficiency = average(negotiation_efficiency_scores)
         negotiation_avg_total = average(negotiation_total_scores)
         negotiation_avg_min_distance = average(negotiation_min_distances)
+        if negotiation_info:
+            base_type = negotiation_info.get("base_type", "")
+            sub_type = negotiation_info.get("sub_type", "")
+            route_id_meta = negotiation_info.get("route_id", route_dir)
+            negotiation_info["agent_count"] = agent_count
+            negotiation_info["scenario_type_label"] = scenario_type_label(base_type, sub_type)
+            negotiation_info["scenario_bar_label"] = scenario_bar_label(
+                route_id_meta, agent_count, base_type, sub_type
+            )
 
         if negotiation_count:
             total_negotiations += negotiation_count
@@ -582,6 +1120,7 @@ def analyze_results(main_path: str):
         "infraction_totals": dict(sorted(infraction_totals.items(), key=lambda item: item[0])),
         "communication_summary": communication_summary,
         "negotiation_records": negotiation_records,
+        "negotiation_sources": negotiation_sources,
     }
 
 
@@ -1207,6 +1746,10 @@ def create_markdown_report(label: str, result: Dict, resources: Optional[Dict] =
     unmatched_csv = None
     negotiation_summary_csv = None
     negotiation_detailed_csv = None
+    negotiation_report = None
+    negotiation_tables: Dict[str, str] = {}
+    negotiation_figures_extra: Dict[str, str] = {}
+    negotiation_logs_dir = None
     figures: Dict[str, str] = {}
 
     if resources:
@@ -1216,6 +1759,10 @@ def create_markdown_report(label: str, result: Dict, resources: Optional[Dict] =
         unmatched_csv = resources.get("unmatched_csv")
         negotiation_summary_csv = resources.get("negotiation_summary_csv")
         negotiation_detailed_csv = resources.get("negotiation_detailed_csv")
+        negotiation_report = resources.get("negotiation_report")
+        negotiation_tables = resources.get("negotiation_tables", {})
+        negotiation_figures_extra = resources.get("negotiation_figures", {})
+        negotiation_logs_dir = resources.get("negotiation_logs_dir")
         figures = resources.get("figures", {})
 
     lines: List[str] = []
@@ -1241,6 +1788,10 @@ def create_markdown_report(label: str, result: Dict, resources: Optional[Dict] =
             ("npc_gap.png", "Routes where NPC traffic changes the driving score (positive values mean NPCs make the scenario harder)."),
             ("negotiations_per_route.png", "Top routes by number of negotiations started."),
             ("negotiation_rounds_distribution.png", "Distribution of negotiation lengths measured in rounds."),
+            ("negotiations_avg_rounds_per_scenario.png", "Average rounds per negotiation for each scenario with descriptive labels."),
+            ("negotiations_rounds_by_agent_count.png", "Negotiation round distribution across agent counts."),
+            ("negotiations_rounds_by_setting.png", "Negotiation rounds grouped by scenario setting."),
+            ("negotiations_rounds_vs_agent_count.png", "Average negotiation rounds versus agent count."),
             ("agent_count_distribution.png", "Routes per agent count split by traffic setting."),
             ("agent_ds_boxplot.png", "Driving score distribution grouped by agent count."),
             ("score_distribution.png", "Distribution of driving scores for NPC and no-NPC runs."),
@@ -1474,6 +2025,33 @@ def create_markdown_report(label: str, result: Dict, resources: Optional[Dict] =
             lines.append(f"[Download negotiation summary]({negotiation_summary_csv})")
         if negotiation_detailed_csv:
             lines.append(f"[Download negotiation detail]({negotiation_detailed_csv})")
+        if negotiation_report:
+            lines.append(f"[Download negotiation text report]({negotiation_report})")
+        if negotiation_tables:
+            table_labels = {
+                "detailed": "Detailed records (full)",
+                "scenario": "Per-scenario summary",
+                "agent": "Agent-count breakdown",
+                "base": "Base-type breakdown",
+                "flavor": "Scenario-setting breakdown",
+            }
+            lines.append("Additional negotiation tables:")
+            for key, path in sorted(negotiation_tables.items()):
+                label = table_labels.get(key, key.replace("_", " ").title())
+                lines.append(f"- {label}: [{path}]({path})")
+        if negotiation_figures_extra:
+            figure_labels = {
+                "avg_rounds_per_scenario": "Average rounds per scenario",
+                "rounds_by_agent_count": "Round distribution by agent count",
+                "rounds_by_setting": "Round distribution by scenario setting",
+                "rounds_vs_agent_count": "Average rounds versus agent count",
+            }
+            lines.append("Additional negotiation figures:")
+            for key, path in sorted(negotiation_figures_extra.items()):
+                label = figure_labels.get(key, key.replace("_", " ").title())
+                lines.append(f"- {label}: [{path}]({path})")
+        if negotiation_logs_dir:
+            lines.append(f"Collected negotiation logs copied to `{negotiation_logs_dir}`")
         lines.append("")
     else:
         lines.append("No negotiations were recorded in these runs.")
@@ -1660,111 +2238,163 @@ def write_experiment_outputs(base_dir: Path, label: str, result: Dict, *, nest: 
     figure_paths = generate_figures(experiment_dir, result)
 
     negotiation_summary_csv_path = None
-    if result["route_entries"]:
-        negotiation_summary_csv = tables_dir / "negotiations_summary.csv"
-        rows = []
-        for entry in result["route_entries"]:
-            rows.append(
-                [
-                    entry["route_name"],
-                    entry["mode"],
-                    entry["category"],
-                    entry.get("agent_count", 0),
-                    entry.get("negotiations_count", 0),
-                    entry.get("negotiation_avg_rounds", 0.0),
-                    entry.get("negotiation_median_rounds", 0.0),
-                    entry.get("negotiation_max_rounds", 0),
-                    entry.get("negotiation_suggestions", 0),
-                    entry.get("negotiation_speakers", 0),
-                    entry.get("negotiation_avg_consensus", 0.0),
-                    entry.get("negotiation_avg_safety", 0.0),
-                    entry.get("negotiation_avg_efficiency", 0.0),
-                    entry.get("negotiation_avg_total", 0.0),
-                    entry.get("negotiation_avg_min_distance", 0.0),
-                ]
-            )
-        write_csv_file(
-            negotiation_summary_csv,
-            [
-                "Route",
-                "Mode",
-                "Category",
-                "Agent Count",
-                "Negotiations",
-                "Avg Rounds",
-                "Median Rounds",
-                "Max Rounds",
-                "Suggestions",
-                "Unique Speakers",
-                "Avg Consensus",
-                "Avg Safety",
-                "Avg Efficiency",
-                "Avg Total Score",
-                "Avg Min Distance",
-            ],
-            [
-                [
-                    row[0],
-                    row[1],
-                    row[2],
-                    str(int(row[3])),
-                    str(int(row[4])),
-                    f"{row[5]:.2f}",
-                    f"{row[6]:.2f}",
-                    str(int(row[7])),
-                    str(int(row[8])),
-                    f"{row[9]:.2f}",
-                    f"{row[10]:.2f}",
-                    f"{row[11]:.2f}",
-                    f"{row[12]:.2f}",
-                    f"{row[13]:.2f}",
-                    f"{row[14]:.2f}",
-                ]
-                for row in rows
-            ],
-        )
-        negotiation_summary_csv_path = negotiation_summary_csv.relative_to(experiment_dir).as_posix()
-
     negotiation_detailed_csv_path = None
-    if result.get("negotiation_records"):
-        negotiation_detailed_csv = tables_dir / "negotiations_detailed.csv"
-        write_csv_file(
-            negotiation_detailed_csv,
-            [
-                "Route",
-                "Mode",
-                "Run",
-                "Stage",
-                "Event",
-                "Rounds",
-                "Unique Speakers",
-                "Suggestion",
-                "Consensus",
-                "Safety",
-                "Efficiency",
-                "Total Score",
-                "Min Distance",
-            ],
-            [
-                [
-                    record["route_id"],
-                    "No NPC" if record["route_id"].startswith("Interdrive_no_npc_") else "NPC",
-                    record["run_id"],
-                    record["stage"],
-                    record["event"],
-                    record["rounds"],
-                    record["unique_speakers"],
-                    int(record["suggestion"]),
-                    record["cons_score"] if record["cons_score"] is not None else "",
-                    record["safety_score"] if record["safety_score"] is not None else "",
-                    record["efficiency_score"] if record["efficiency_score"] is not None else "",
-                    record["total_score"] if record["total_score"] is not None else "",
-                    record["min_distance"] if record["min_distance"] is not None else "",
-                ]
-                for record in result["negotiation_records"]
-            ],
-        )
-        negotiation_detailed_csv_path = negotiation_detailed_csv.relative_to(experiment_dir).as_posix()
+    negotiation_report_path = None
+    negotiation_extra_tables: Dict[str, str] = {}
+    negotiation_extra_figures: Dict[str, str] = {}
+    collected_logs_rel_path = None
+
+    negotiation_records = result.get("negotiation_records") or []
+    if negotiation_records:
+        detailed_df = pd.DataFrame.from_records(negotiation_records)
+        if not detailed_df.empty:
+            scenario_agent_map = {
+                entry["route_id"]: entry.get("agent_count")
+                for entry in result["route_entries"]
+            }
+
+            def infer_mode(name: str) -> str:
+                if isinstance(name, str):
+                    if name.startswith("Interdrive_no_npc_"):
+                        return "No NPC"
+                    if name.startswith("Interdrive_npc_"):
+                        return "NPC"
+                return ""
+
+            if "scenario" not in detailed_df.columns:
+                detailed_df["scenario"] = detailed_df.get("route_id", "")
+            if "mode" not in detailed_df.columns:
+                detailed_df["mode"] = detailed_df["scenario"].map(infer_mode)
+            else:
+                detailed_df["mode"] = detailed_df["mode"].replace("", pd.NA)
+                detailed_df["mode"] = detailed_df["mode"].fillna(detailed_df["scenario"].map(infer_mode))
+
+            mapped_agents = detailed_df["scenario"].map(scenario_agent_map)
+            if "agent_count" in detailed_df.columns:
+                mapped_agents = mapped_agents.fillna(detailed_df["agent_count"])
+            detailed_df["agent_count"] = mapped_agents
+
+            for column in ("base_type", "sub_type"):
+                if column not in detailed_df.columns:
+                    detailed_df[column] = ""
+                else:
+                    detailed_df[column] = detailed_df[column].fillna("")
+
+            detailed_df["scenario_type_label"] = detailed_df.apply(
+                lambda row: scenario_type_label(row["base_type"], row["sub_type"]),
+                axis=1,
+            )
+            detailed_df["scenario_bar_label"] = detailed_df.apply(
+                lambda row: scenario_bar_label(
+                    row.get("route_id", row["scenario"]),
+                    row.get("agent_count"),
+                    row["base_type"],
+                    row["sub_type"],
+                ),
+                axis=1,
+            )
+
+            detailed_df["suggestion"] = detailed_df["suggestion"].astype(int)
+            detailed_df["rounds"] = detailed_df["rounds"].astype(float)
+
+            scenario_stats = negotiation_scenario_summary(detailed_df)
+            agent_stats_df = negotiation_group_summary(detailed_df, "agent_count")
+            base_stats_df = negotiation_group_summary(detailed_df, "base_type")
+            flavor_stats_df = negotiation_flavor_summary(detailed_df)
+            overall_neg_stats = negotiation_overall_statistics(detailed_df)
+
+            negotiation_summary_csv = tables_dir / "negotiations_summary.csv"
+            summary_columns = [
+                ("scenario", "Scenario"),
+                ("mode", "Mode"),
+                ("agent_count", "Agent Count"),
+                ("negotiations", "Negotiations"),
+                ("mean_rounds", "Avg Rounds"),
+                ("median_rounds", "Median Rounds"),
+                ("max_rounds", "Max Rounds"),
+                ("suggestions", "Suggestions"),
+                ("avg_words", "Avg Words/Msg"),
+                ("avg_chars", "Avg Chars/Msg"),
+                ("total_rounds", "Total Rounds"),
+                ("scenario_type_label", "Scenario Type"),
+            ]
+            summary_headers = dict(summary_columns)
+            summary_keys = [col for col, _ in summary_columns]
+            if scenario_stats.empty:
+                summary_df = pd.DataFrame(columns=summary_headers.values())
+            else:
+                summary_df = scenario_stats[summary_keys].rename(columns=summary_headers)
+                summary_df.sort_values(["Mode", "Scenario"], inplace=True, ignore_index=True)
+            summary_df.to_csv(negotiation_summary_csv, index=False)
+            negotiation_summary_csv_path = negotiation_summary_csv.relative_to(experiment_dir).as_posix()
+
+            negotiation_detailed_csv = tables_dir / "negotiations_detailed.csv"
+            detailed_export_columns = [
+                ("scenario", "Scenario"),
+                ("mode", "Mode"),
+                ("run_id", "Run"),
+                ("stage", "Stage"),
+                ("event", "Event"),
+                ("timestamp", "Timestamp"),
+                ("rounds", "Rounds"),
+                ("unique_speakers", "Unique Speakers"),
+                ("avg_words_per_message", "Avg Words/Msg"),
+                ("avg_chars_per_message", "Avg Chars/Msg"),
+                ("suggestion", "Suggestion"),
+                ("cons_score", "Consensus"),
+                ("safety_score", "Safety"),
+                ("efficiency_score", "Efficiency"),
+                ("total_score", "Total Score"),
+                ("min_distance", "Min Distance"),
+                ("route_id", "Route ID"),
+                ("agent_count", "Agent Count"),
+                ("base_type", "Base Type"),
+                ("sub_type", "Sub Type"),
+            ]
+            detailed_export = detailed_df[[col for col, _ in detailed_export_columns]].rename(
+                columns=dict(detailed_export_columns)
+            )
+            detailed_export.to_csv(negotiation_detailed_csv, index=False)
+            negotiation_detailed_csv_path = negotiation_detailed_csv.relative_to(experiment_dir).as_posix()
+
+            extra_table_paths = save_negotiation_tables(
+                detailed_df,
+                scenario_stats,
+                agent_stats_df,
+                base_stats_df,
+                flavor_stats_df,
+                tables_dir,
+            )
+            negotiation_extra_tables = {
+                key: path.relative_to(experiment_dir).as_posix() for key, path in extra_table_paths.items()
+            }
+
+            negotiation_figures_dir = experiment_dir / "figures" / "negotiations"
+            extra_figure_paths = save_negotiation_figures(detailed_df, scenario_stats, negotiation_figures_dir)
+            for path in extra_figure_paths.values():
+                figure_paths[path.name] = path.relative_to(experiment_dir).as_posix()
+            negotiation_extra_figures = {
+                key: path.relative_to(experiment_dir).as_posix() for key, path in extra_figure_paths.items()
+            }
+
+            negotiation_report_path = tables_dir / "negotiations_report.txt"
+            negotiation_report_text = render_negotiation_report(
+                overall_neg_stats, agent_stats_df, base_stats_df, flavor_stats_df
+            )
+            negotiation_report_path.write_text(negotiation_report_text + "\n", encoding="utf-8")
+            negotiation_report_path = negotiation_report_path.relative_to(experiment_dir).as_posix()
+
+    negotiation_sources = result.get("negotiation_sources") or []
+    if negotiation_sources:
+        logs_dir = experiment_dir / "collected_nego_logs"
+        ensure_directory(logs_dir)
+        for source in negotiation_sources:
+            target = logs_dir / f"{source.scenario_name}.json"
+            try:
+                shutil.copy2(source.source, target)
+            except FileNotFoundError:
+                continue
+        collected_logs_rel_path = logs_dir.relative_to(experiment_dir).as_posix()
 
     resources = {
         "per_route_csv": route_csv_path.relative_to(experiment_dir).as_posix(),
@@ -1774,6 +2404,10 @@ def write_experiment_outputs(base_dir: Path, label: str, result: Dict, *, nest: 
         "figures": figure_paths,
         "negotiation_summary_csv": negotiation_summary_csv_path,
         "negotiation_detailed_csv": negotiation_detailed_csv_path,
+        "negotiation_report": negotiation_report_path,
+        "negotiation_tables": negotiation_extra_tables,
+        "negotiation_figures": negotiation_extra_figures,
+        "negotiation_logs_dir": collected_logs_rel_path,
     }
 
     markdown_content = create_markdown_report(label, result, resources)

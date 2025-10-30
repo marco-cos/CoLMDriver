@@ -167,16 +167,19 @@ The script generates:
 - **CSV Data Tables**:
   - Per-route summary
   - Category summaries 
-  - Negotiation statistics
+  - Negotiation statistics (scenario/agent/setting breakdowns)
   - Infractions breakdown
 - **Visualizations**:
   - Driving scores by scenario category
   - Success rates across traffic conditions
   - NPC impact analysis
-  - Negotiation frequency and rounds distribution
+  - Negotiation frequency, rounds, and message-length distributions
   - Agent count distribution
   - Score distributions
   - Infractions breakdown
+- **Artifacts**:
+  - Text report summarizing negotiation behavior
+  - Collected `nego.json` files copied into the output directory for easy sharing
 
 #### Key Metrics Analyzed
 
