@@ -169,6 +169,10 @@ conda activate colmdriver
 # Start CARLA server, if port 2000 is already in use, choose another
 CUDA_VISIBLE_DEVICES=0 ./external_paths/carla_root/CarlaUE4.sh --world-port=2000 -prefer-nvidia
 
+
+#If CARLA seg faults on startup, try this command:
+conda install -c conda-forge libglvnd mesa-libgl-devel libegl libxrender libxext libxi
+
 # Open another terminal
 
 # Evaluate CoLMDriver on Interdrive(92 tests), 0 is CUDA id, 2000 is CARLA port (be consistent with your CARLA server)
