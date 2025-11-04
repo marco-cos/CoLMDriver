@@ -23,11 +23,13 @@ from typing import List
 import carla
 
 from agents.navigation.local_planner import RoadOption
+from agents.navigation.global_route_planner import GlobalRoutePlanner
+from agents.navigation.global_route_planner_dao import GlobalRoutePlannerDAO
 
 # pylint: disable=line-too-long
 from srunner.scenarioconfigs.scenario_configuration import ScenarioConfiguration, ActorConfigurationData
 # pylint: enable=line-too-long
-from srunner.scenariomanager.scenarioatomics.atomic_behaviors import Idle, ScenarioTriggerer
+from srunner.scenariomanager.scenarioatomics.atomic_behaviors import Idle, ScenarioTriggerer, WaypointFollower
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 from srunner.scenarios.basic_scenario import BasicScenario
 from srunner.scenarios.control_loss import ControlLoss
@@ -245,6 +247,8 @@ class RouteScenario(BasicScenario):
         self.background_params = scenario_parameter.get('Background',{})
 
         self.route_scenario_dic = {}
+        self._custom_actor_configs = list(getattr(config, "custom_actors", []) or [])
+        self._custom_actor_plans: List[dict] = []
 
         # update waypoints and scenarios along the routes
         self._update_route(world, config, debug_mode>0)
@@ -1006,10 +1010,125 @@ class RouteScenario(BasicScenario):
         for _actor in new_actors:
             self.other_actors.append(_actor)
 
+        self._spawn_custom_route_actors()
+
         # Add all the actors of the specific scenarios to self.other_actors
         for list_scenarios in self.list_scenarios:
             for scenario in list_scenarios:
                 self.other_actors.extend(scenario.other_actors)
+
+    def _spawn_custom_route_actors(self) -> None:
+        """
+        Spawn user-provided NPC actors that should follow predetermined paths.
+        """
+        if not self._custom_actor_configs:
+            return
+
+        world_map = CarlaDataProvider.get_map()
+        planner = None
+        if world_map is not None:
+            try:
+                dao = GlobalRoutePlannerDAO(world_map, 1.0)
+                planner = GlobalRoutePlanner(dao)
+                planner.setup()
+            except Exception:  # pylint: disable=broad-except
+                planner = None
+
+        for actor_cfg in self._custom_actor_configs:
+            spawn_tf_src: carla.Transform = actor_cfg["spawn_transform"]
+            spawn_tf = carla.Transform(
+                carla.Location(
+                    x=spawn_tf_src.location.x,
+                    y=spawn_tf_src.location.y,
+                    z=spawn_tf_src.location.z,
+                ),
+                carla.Rotation(
+                    pitch=spawn_tf_src.rotation.pitch,
+                    yaw=spawn_tf_src.rotation.yaw,
+                    roll=spawn_tf_src.rotation.roll,
+                ),
+            )
+
+            if world_map is not None:
+                snapped_wp = world_map.get_waypoint(
+                    spawn_tf.location,
+                    project_to_road=True,
+                    lane_type=carla.LaneType.Driving,
+                )
+                if snapped_wp is not None:
+                    spawn_tf = snapped_wp.transform
+
+            spawn_tf.location.z += 0.5
+
+            rolename = actor_cfg.get("rolename") or actor_cfg["name"]
+            try:
+                new_actor = CarlaDataProvider.request_new_actor(
+                    actor_cfg["model"],
+                    spawn_tf,
+                    rolename=rolename,
+                    autopilot=False,
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                print(f"[RouteScenario] Failed to spawn custom actor {rolename}: {exc}")
+                continue
+
+            if new_actor is None:
+                print(f"[RouteScenario] Unable to spawn custom actor {rolename} at {spawn_tf}")
+                continue
+
+            self.other_actors.append(new_actor)
+
+            plan_locations = []
+            for loc in actor_cfg["plan"]:
+                snapped_loc = carla.Location(x=loc.x, y=loc.y, z=loc.z)
+                if world_map is not None:
+                    wp = world_map.get_waypoint(
+                        loc,
+                        project_to_road=True,
+                        lane_type=carla.LaneType.Driving,
+                    )
+                    if wp is not None:
+                        snapped_loc = wp.transform.location
+                plan_locations.append(snapped_loc)
+
+            dense_plan = []
+            if planner is not None and len(plan_locations) >= 2:
+                route_plan = []
+                for idx in range(len(plan_locations) - 1):
+                    start_loc = plan_locations[idx]
+                    end_loc = plan_locations[idx + 1]
+                    segment = planner.trace_route(start_loc, end_loc)
+                    if segment:
+                        route_plan.extend(segment)
+                if route_plan:
+                    if world_map is not None:
+                        spawn_wp = world_map.get_waypoint(
+                            spawn_tf.location,
+                            project_to_road=True,
+                            lane_type=carla.LaneType.Driving,
+                        )
+                        if spawn_wp is not None:
+                            first_option = route_plan[0][1] if isinstance(route_plan[0], tuple) and len(route_plan[0]) > 1 else RoadOption.LANEFOLLOW
+                            route_plan[0] = (spawn_wp, first_option)
+                    dense_plan = route_plan
+            if not dense_plan:
+                if plan_locations:
+                    plan_locations[0] = carla.Location(
+                        x=spawn_tf.location.x,
+                        y=spawn_tf.location.y,
+                        z=spawn_tf.location.z,
+                    )
+                dense_plan = plan_locations
+
+            self._custom_actor_plans.append(
+                {
+                    "actor": new_actor,
+                    "name": actor_cfg["name"],
+                    "plan": dense_plan,
+                    "target_speed": actor_cfg["target_speed"],
+                    "avoid_collision": actor_cfg.get("avoid_collision", False),
+                }
+            )
 
     def _create_behavior(self):
         """
@@ -1023,6 +1142,18 @@ class RouteScenario(BasicScenario):
 
             subbehavior = py_trees.composites.Parallel(name="Behavior",
                                                     policy=py_trees.common.ParallelPolicy.SUCCESS_ON_ALL)
+
+            if ego_vehicle_id == 0 and self._custom_actor_plans:
+                for actor_plan in self._custom_actor_plans:
+                    subbehavior.add_child(
+                        WaypointFollower(
+                            actor_plan["actor"],
+                            target_speed=actor_plan["target_speed"],
+                            plan=actor_plan["plan"],
+                            avoid_collision=actor_plan["avoid_collision"],
+                            name=f"FollowWaypoints-{actor_plan['name']}",
+                        )
+                    )
 
             scenario_behaviors = []
             blackboard_list = []

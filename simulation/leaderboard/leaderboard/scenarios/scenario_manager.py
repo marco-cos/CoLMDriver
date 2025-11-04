@@ -21,6 +21,7 @@ import carla
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 from srunner.scenariomanager.timer import GameTime
 from srunner.scenariomanager.watchdog import Watchdog
+from srunner.scenariomanager.scenarioatomics.atomic_criteria import RouteCompletionTest
 
 from leaderboard.autoagents.agent_wrapper import AgentWrapper, AgentError
 from leaderboard.envs.sensor_interface import SensorReceivedNoData
@@ -293,6 +294,30 @@ class ScenarioManager(object):
                 ego_trans = self.prev_ego_trans
             spectator.set_transform(carla.Transform(ego_trans.location + carla.Location(z=50),
                                                         carla.Rotation(pitch=-90)))
+
+            # terminate route scenarios once all route completion criteria succeed
+            all_routes_completed = True
+            for scenario_instance in self.scenario:
+                if scenario_instance is None:
+                    continue
+                criteria = scenario_instance.get_criteria()
+                if not criteria:
+                    all_routes_completed = False
+                    break
+                completion_found = False
+                for criterion in criteria:
+                    if isinstance(criterion, RouteCompletionTest):
+                        completion_found = True
+                        if criterion.test_status != "SUCCESS":
+                            all_routes_completed = False
+                            break
+                if not completion_found:
+                    all_routes_completed = False
+                if not all_routes_completed:
+                    break
+
+            if all_routes_completed and self._running:
+                self._running = False
 
         if self._running and self.get_running_status():
             CarlaDataProvider.get_world().tick(self._timeout)

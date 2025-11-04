@@ -110,7 +110,13 @@ def prepare_routes_from_zip(
             extracted.append((target_path, role, route_id, town))
             rel_path = target_path.relative_to(dest_dir).as_posix()
             actors_manifest.setdefault(role, []).append(
-                {"file": rel_path, "route_id": route_id, "town": town}
+                {
+                    "file": rel_path,
+                    "route_id": route_id,
+                    "town": town,
+                    "name": Path(member.filename).stem,
+                    "kind": role,
+                }
             )
 
     ego_count = sum(1 for _, role, _, _ in extracted if role == "ego")

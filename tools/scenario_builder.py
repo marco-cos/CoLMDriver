@@ -403,6 +403,9 @@ def generate_html(town_payloads: dict[str, dict[str, float | list[float]]],
     <script>
     const colorPalette = ${colors_json};
     const townsData = ${towns_json};
+    const MIRROR_X = true;
+    const MIRROR_Y = false;
+
     const townNames = Object.keys(townsData);
     let activeTown = ${initial_town};
     if (!townNames.includes(activeTown) && townNames.length > 0) {
@@ -920,8 +923,16 @@ def generate_html(town_payloads: dict[str, dict[str, float | list[float]]],
             data.road_id[idx],
             data.lane_direction ? data.lane_direction[idx] : ''
         ]);
-        layout.xaxis.range = [data.xmin, data.xmax];
-        layout.yaxis.range = [data.ymin, data.ymax];
+        if (MIRROR_X) {
+            layout.xaxis.range = [data.xmax, data.xmin];
+        } else {
+            layout.xaxis.range = [data.xmin, data.xmax];
+        }
+        if (MIRROR_Y) {
+            layout.yaxis.range = [data.ymax, data.ymin];
+        } else {
+            layout.yaxis.range = [data.ymin, data.ymax];
+        }
         layout.xaxis.autorange = false;
         layout.yaxis.autorange = false;
 
