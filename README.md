@@ -11,14 +11,27 @@ Check our [paper](https://arxiv.org/pdf/2503.08683) for more details.
 ## Installation
 Two environments are needed: 'vllm' for MLLMs inference and 'colmdriver' for simulation.
 
-### vllm env
-Refer to official repo of [vllm](https://github.com/vllm-project/vllm.).
+### vLLM env
+#### Step 1: Install conda (if not installed already) 
+```Shell
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash Miniconda3-latest-Linux-x86_64.sh
+```
+
+#### Step 2: Environment Creation and VLLM download 
+```Shell
+conda create -n vllm python=3.10
+conda activate vllm
+pip install vllm
+```
 
 ### CoLMDriver env
 #### Step 1: Basic Installation for colmdriver
 Get code and create pytorch environment.
 ```Shell
-git clone https://github.com/cxliu0314/CoLMDriver.git
+git clone https://github.com/marco-cos/CoLMDriver.git
+cd CoLMDriver
+
 conda create --name colmdriver python=3.7 cmake=3.22.1
 conda activate colmdriver
 conda install pytorch==1.10.1 torchvision==0.11.2 torchaudio==0.10.1 cudatoolkit=11.3 -c pytorch -c conda-forge
@@ -63,6 +76,28 @@ We use spconv 1.2.1 to generate voxel features in perception module.
 
 To install spconv 1.2.1, please follow the guide in https://github.com/traveller59/spconv/tree/v1.2.1.
 
+Or run the following commands:
+```Shell
+# 1. Activate your environment (if not activated already)
+conda activate colmdriver
+
+# 2. Install dependencies (these are all user-space)
+conda install -y cmake=3.22.1 ninja boost ccache -c conda-forge
+pip install pybind11 numpy
+
+# 3. Clone spconv recursively (submodules required!)
+git clone -b v1.2.1 --recursive https://github.com/traveller59/spconv.git
+cd spconv
+
+# 4. Build the wheel (will compile in your conda CUDA toolchain)
+python setup.py bdist_wheel
+
+# 5. Install the resulting .whl (no sudo needed)
+pip install dist/spconv-1.2.1-*.whl
+
+cd ..
+```
+
 #### Step 4: Set up
 ```Shell
 # Set up
@@ -99,26 +134,35 @@ cd ..
             |--waypoints_planner
 ```
 
-**Step 2:** Running VLM, LLM
+To download the checkpoints through command line and move them into the correct directories (no GUI required):
 ```Shell
-#Enter Conda if in TMUX:
-source ~/.conda/etc/profile.d/conda.sh
+#In CoLMDriver repostiory directory, with colmdriver conda env activated
+pip install gdown
+gdown 1z3poGdoomhujCNQtoQ80-BCO34GTOLb-
 
+mkdir ckpt
+mv colmdriver.zip ckpt
+cd ckpt
+unzip colmdriver.zip
+rm colmdriver.zip
+```
+
+**Step 2:** Running VLM, LLM (from repository root)
+```Shell
 #Enter conda ENV
 conda activate vllm
 # VLM on call
 CUDA_VISIBLE_DEVICES=6 vllm serve ckpt/colmdriver/VLM --port 1111 --max-model-len 8192 --trust-remote-code --enable-prefix-caching
 
-# LLM on call
+# LLM on call (in new terminal, with vllm env activated)
 CUDA_VISIBLE_DEVICES=7 vllm serve ckpt/colmdriver/LLM --port 8888 --max-model-len 4096 --trust-remote-code --enable-prefix-caching
 ```
+**Make sure that the CUDA_VISIBLE_DEVICES variable is set to a GPU available, which can be checked using the ```nvidia-smi``` command**
+
 Note: make sure that the selected ports (1111,8888) are not occupied by other services. If you use other ports, please modify values of key 'comm_client' and 'vlm_client' in `simulation/leaderboard/team_code/agent_config/colmdriver_config.yaml` accordingly.
 
 **Step 3:** Run CARLA, run CoLMDriver
 ```Shell
-#Enter Conda if in TMUX:
-source ~/.conda/etc/profile.d/conda.sh
-
 #Enter Conda ENV
 conda activate colmdriver
 
