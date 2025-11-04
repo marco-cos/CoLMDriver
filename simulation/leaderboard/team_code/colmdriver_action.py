@@ -21,6 +21,7 @@ import pygame
 
 from openai import OpenAI
 import base64
+from types import SimpleNamespace
 
 from agents.navigation.local_planner import RoadOption
 
@@ -39,6 +40,7 @@ from opencood.visualization import vis_utils, my_vis, simple_vis_multiclass
 
 SAVE_PATH = os.environ.get("SAVE_PATH", 'eval')
 os.environ["SDL_VIDEODRIVER"] = "dummy"
+OFFLINE_MODE = os.environ.get("COLMDRIVER_OFFLINE", "0") == "1"
 
 commands_dict = {"-1": "void",
 				 "1": "turn left",
@@ -300,11 +302,16 @@ command_dict = {-1: "no command",
 
 class VLM_Client:
 	def __init__(self, url):
-		self.client = OpenAI(
-			api_key='EMPTY',
-			base_url=url
-		)
-		self.model_name = self.client.models.list().data[0].id
+		self.offline = OFFLINE_MODE
+		if not self.offline:
+			self.client = OpenAI(
+				api_key='EMPTY',
+				base_url=url
+			)
+			self.model_name = self.client.models.list().data[0].id
+		else:
+			self.client = None
+			self.model_name = 'offline-vlm'
 	
 	def edit_prompt(self, prompt, measurements, comm, perception, det_type):
 		speed = measurements['speed']
@@ -350,6 +357,8 @@ class VLM_Client:
 		return prompt
 
 	def infer(self, front_img, system_prompt):
+		if self.offline:
+			return "KEEP", 0.0
 		pil_image = Image.fromarray(front_img)
 		buffered = io.BytesIO()
 		pil_image.save(buffered, format="JPEG")
@@ -382,7 +391,11 @@ class VLM_Client:
 
 class Comm_Client:
 	def __init__(self, url, api_key='', api_base=''):
-		if api_key!='':
+		self.offline = OFFLINE_MODE
+		if self.offline:
+			self.client = None
+			self.model_name = 'offline-comm'
+		elif api_key!='':
 			self.client = OpenAI(
 				api_key=api_key,
 				base_url=api_base
@@ -400,6 +413,11 @@ class Comm_Client:
 		self.cons_anly = 'None'
 	
 	def send_message(self, prompt, max_tokens=256, return_time=False):
+		if self.offline:
+			stub_response = "I will keep my speed and follow the lane."
+			if return_time:
+				return stub_response, 0.0
+			return stub_response
 		t = time.time()
 		while True:
 			try:
@@ -536,6 +554,13 @@ class Comm_Client:
 		return comm_info_list, dis_order
 
 	def comm(self, comm_info_list, car_id, local_comm_content, suggestion):
+		if self.offline:
+			for comm_dict in comm_info_list:
+				if comm_dict['ego_id'] == car_id:
+					info = comm_dict
+					break
+			message = f"I propose to {info['ego_intention']} and maintain speed."
+			return message, 0.0
 		for comm_dict in comm_info_list:
 			if comm_dict['ego_id'] == car_id:
 				info = comm_dict
@@ -584,6 +609,10 @@ You are Vehicle {info['ego_id']}, the message you want to negotiate with other c
 		return message, llm_infer_time
 
 	def sum_action(self, comm_content):
+		if self.offline:
+			ids = {str(item['id']) for item in comm_content}
+			action_list = {ego_id: {'speed': 'KEEP'} for ego_id in ids}
+			return action_list, 0.0
 		prompt = '''**Task**
 Given a conversation of multiple cars negotiating to reach consensus, classify each vehicle's speed change into [STOP, SLOWER, KEEP, FASTER] and output the result as a string in format: {'id': car_id, 'speed': category}.
 
@@ -615,7 +644,11 @@ Your task is to analyze the given conversations for each vehicle and output the 
 
 class Nego_Client:
 	def __init__(self, url, api_key, api_base):
-		if api_key!='':
+		self.offline = OFFLINE_MODE
+		if self.offline:
+			self.client = None
+			self.model_name = 'offline-nego'
+		elif api_key!='':
 			self.client = OpenAI(
 				api_key=api_key,
 				base_url=api_base
@@ -633,6 +666,8 @@ class Nego_Client:
 		self.current_step = -1
 
 	def send_message(self, prompt, max_tokens=256):
+		if self.offline:
+			return "Consensus score: 80"
 		t = time.time()
 		while True:
 			try:
@@ -1410,6 +1445,14 @@ class PnP_infer():
 						self.cmd_speed[cmd_index] = 1
 						self.speed_inten_veh[ego_id] = speed_inten
 						break
+			# Fallback: ensure we request acceleration when standing still.
+			if (float(measurements["speed"]) < 0.5 and
+					(self.speed_inten_veh[ego_id] in (None, "KEEP", "STOP") or self.cmd_speed.sum().item() == 0)):
+				idx_faster = self.speed_inten_list.index("FASTER")
+				self.cmd_speed.zero_()
+				self.cmd_speed[self.judge_speed(idx_faster)] = 1
+				self.speed_inten_veh[ego_id] = "FASTER"
+				print("[INFO] Applying fallback speed command: FASTER (current speed {:.2f} m/s)".format(float(measurements["speed"])))
 		except Exception as e:
 			print('vlm inference failed because ', e)
 

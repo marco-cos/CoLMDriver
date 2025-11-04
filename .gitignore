@@ -264,6 +264,7 @@ opencood/hypes_yaml/opv2v/heter
 ./vscode
 results/
 checkpoints/
+CustomRoutes/
 
 # *xml
 # *yaml
@@ -273,3 +274,4 @@ checkpoints/
 ckpt/
 ckpt
 simulation/assets/LMDrive
+testscenarios/
