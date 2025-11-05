@@ -39,6 +39,7 @@ conda install cudnn -c conda-forge
 
 pip install -r opencood/requirements.txt
 pip install -r simulation/requirements.txt
+pip install openai
 ```
 
 #### Step 2: Download and setup CARLA 0.9.10.1.
@@ -145,6 +146,10 @@ mv colmdriver.zip ckpt
 cd ckpt
 unzip colmdriver.zip
 rm colmdriver.zip
+
+#Fix obsolete dataset dependancy bug
+sed -i "s|root_dir: .*|root_dir: $(pwd)|; s|test_dir: .*|test_dir: $(pwd)|; s|validate_dir: .*|validate_dir: $(pwd)|" colmdriver/percpetion/config.yaml
+touch dataset_index.txt
 ```
 
 **Step 2:** Running VLM, LLM (from repository root)
