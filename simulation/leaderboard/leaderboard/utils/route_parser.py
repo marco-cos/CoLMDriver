@@ -7,10 +7,12 @@
 Module used to parse all the route and scenario configuration parameters.
 """
 from collections import OrderedDict
+from pathlib import Path
 import json
 import math
 import xml.etree.ElementTree as ET
-from typing import List
+from typing import Dict, List
+import os
 
 import carla
 from agents.navigation.local_planner import RoadOption
@@ -19,6 +21,185 @@ from srunner.scenarioconfigs.route_scenario_configuration import RouteScenarioCo
 # TODO  check this threshold, it could be a bit larger but not so large that we cluster scenarios.
 TRIGGER_THRESHOLD = 2.0  # Threshold to say if a trigger position is new or repeated, works for matching positions
 TRIGGER_ANGLE_THRESHOLD = 10  # Threshold to say if two angles can be considering matching when matching transforms.
+
+_CUSTOM_ACTOR_MANIFEST_CACHE = None
+ROLE_DEFAULTS: Dict[str, Dict[str, object]] = {
+    "npc": {"model": "vehicle.tesla.model3", "speed": 8.0},
+    "pedestrian": {"model": "walker.pedestrian.0001", "speed": 1.5},
+    "bicycle": {"model": "vehicle.diamondback.century", "speed": 4.0},
+    "bike": {"model": "vehicle.diamondback.century", "speed": 4.0},
+    "static": {"model": "vehicle.carlamotors.carlacola", "speed": 0.0},
+}
+
+
+def _resolve_routes_dir(manifest_path: Path) -> Path:
+    """
+    Determine the base directory for custom actor files.
+    """
+    env_route_dir = os.environ.get("ROUTES_DIR")
+    if env_route_dir:
+        return Path(env_route_dir).expanduser().resolve()
+    return manifest_path.parent.resolve()
+
+
+def _load_custom_actor_manifest() -> Dict[str, List[Dict[str, object]]]:
+    """
+    Load and cache the custom actor manifest if present.
+    """
+    global _CUSTOM_ACTOR_MANIFEST_CACHE  # pylint: disable=global-statement
+
+    if _CUSTOM_ACTOR_MANIFEST_CACHE is not None:
+        return _CUSTOM_ACTOR_MANIFEST_CACHE
+
+    manifest_env = os.environ.get("CUSTOM_ACTOR_MANIFEST")
+    if not manifest_env:
+        _CUSTOM_ACTOR_MANIFEST_CACHE = {}
+        return _CUSTOM_ACTOR_MANIFEST_CACHE
+
+    manifest_path = Path(manifest_env).expanduser().resolve()
+    if not manifest_path.exists():
+        _CUSTOM_ACTOR_MANIFEST_CACHE = {}
+        return _CUSTOM_ACTOR_MANIFEST_CACHE
+
+    try:
+        manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        _CUSTOM_ACTOR_MANIFEST_CACHE = {}
+        return _CUSTOM_ACTOR_MANIFEST_CACHE
+
+    base_dir = _resolve_routes_dir(manifest_path)
+    actor_entries: Dict[str, List[Dict[str, object]]] = {}
+
+    for role, entries in manifest_data.items():
+        if role == "ego":
+            continue
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            route_id = entry.get("route_id")
+            rel_path = entry.get("file")
+            town = entry.get("town")
+            if not route_id or not rel_path:
+                continue
+            rel_path_obj = Path(rel_path)
+            actor_path = (base_dir / rel_path_obj).resolve()
+            actor_entries.setdefault(str(route_id), []).append(
+                {
+                    "role": role,
+                    "town": town,
+                    "path": actor_path,
+                    "name": entry.get("name") or rel_path_obj.stem,
+                    "speed": entry.get("speed"),
+                    "model": entry.get("model"),
+                }
+            )
+
+    _CUSTOM_ACTOR_MANIFEST_CACHE = actor_entries
+    return _CUSTOM_ACTOR_MANIFEST_CACHE
+
+
+def _get_default_actor_speed() -> float:
+    """
+    Obtain the default speed for custom actors from the environment, fallback to 8.0 m/s.
+    """
+    default_speed = os.environ.get("CUSTOM_ACTOR_DEFAULT_SPEED", "8.0")
+    try:
+        return max(0.0, float(default_speed))
+    except ValueError:
+        return 8.0
+
+
+def _build_custom_actor_configs(route_id: str, town: str) -> List[Dict[str, object]]:
+    """
+    Convert manifest entries for a route into configuration dictionaries.
+    """
+    manifest = _load_custom_actor_manifest()
+    if not manifest:
+        return []
+
+    entries = manifest.get(str(route_id), [])
+    if not entries:
+        return []
+
+    actor_configs: List[Dict[str, object]] = []
+    global_default_speed = _get_default_actor_speed()
+
+    for entry in entries:
+        town_filter = entry.get("town")
+        if town_filter and town_filter != town:
+            continue
+
+        xml_path: Path = entry["path"]
+        if not xml_path.exists():
+            continue
+
+        try:
+            xml_root = ET.parse(str(xml_path)).getroot()
+        except ET.ParseError:
+            continue
+
+        route_node = xml_root.find("route")
+        if route_node is None:
+            continue
+
+        plan_locations: List[carla.Location] = []
+        spawn_transform = None
+        for index, waypoint in enumerate(route_node.iter("waypoint")):
+            try:
+                loc = carla.Location(
+                    x=float(waypoint.attrib.get("x", 0.0)),
+                    y=float(waypoint.attrib.get("y", 0.0)),
+                    z=float(waypoint.attrib.get("z", 0.0)),
+                )
+            except (TypeError, ValueError):
+                continue
+
+            plan_locations.append(loc)
+
+            if index == 0:
+                try:
+                    yaw = float(waypoint.attrib.get("yaw", 0.0))
+                except (TypeError, ValueError):
+                    yaw = 0.0
+                try:
+                    pitch = float(waypoint.attrib.get("pitch", 0.0))
+                except (TypeError, ValueError):
+                    pitch = 0.0
+                try:
+                    roll = float(waypoint.attrib.get("roll", 0.0))
+                except (TypeError, ValueError):
+                    roll = 0.0
+                spawn_transform = carla.Transform(
+                    loc,
+                    carla.Rotation(pitch=pitch, yaw=yaw, roll=roll),
+                )
+
+        if not plan_locations or spawn_transform is None:
+            continue
+
+        role = (entry.get("kind") or entry.get("role") or "npc").lower()
+        role_defaults = ROLE_DEFAULTS.get(role, {})
+
+        default_model = entry.get("model") or role_defaults.get("model") or "vehicle.*"
+        try:
+            target_speed = float(entry.get("speed", role_defaults.get("speed", global_default_speed)))
+        except (TypeError, ValueError):
+            target_speed = float(role_defaults.get("speed", global_default_speed))
+
+        actor_configs.append(
+            {
+                "name": entry["name"],
+                "rolename": entry["name"],
+                "role": role,
+                "model": default_model,
+                "spawn_transform": spawn_transform,
+                "plan": plan_locations,
+                "target_speed": target_speed,
+                "avoid_collision": entry.get("avoid_collision", False),
+            }
+        )
+
+    return actor_configs
 
 # for loading predefined weathers while parsing routes
 WEATHERS = {
@@ -92,6 +273,7 @@ class RouteParser(object):
                                                     z=float(waypoint.attrib['z'])))
 
             new_config.trajectory = waypoint_list
+            new_config.custom_actors = _build_custom_actor_configs(route_id, new_config.town)
 
             list_route_descriptions.append(new_config)
 
