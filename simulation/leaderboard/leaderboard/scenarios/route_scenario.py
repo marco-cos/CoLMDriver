@@ -1035,6 +1035,7 @@ class RouteScenario(BasicScenario):
                 planner = None
 
         for actor_cfg in self._custom_actor_configs:
+            role = actor_cfg.get("role", "npc")
             spawn_tf_src: carla.Transform = actor_cfg["spawn_transform"]
             spawn_tf = carla.Transform(
                 carla.Location(
@@ -1058,7 +1059,8 @@ class RouteScenario(BasicScenario):
                 if snapped_wp is not None:
                     spawn_tf = snapped_wp.transform
 
-            spawn_tf.location.z += 0.5
+            if role != "static":
+                spawn_tf.location.z += 0.5
 
             rolename = actor_cfg.get("rolename") or actor_cfg["name"]
             try:
@@ -1077,6 +1079,13 @@ class RouteScenario(BasicScenario):
                 continue
 
             self.other_actors.append(new_actor)
+
+            if role == "static":
+                try:
+                    new_actor.set_simulate_physics(False)
+                except Exception:  # pylint: disable=broad-except
+                    pass
+                continue
 
             plan_locations = []
             for loc in actor_cfg["plan"]:

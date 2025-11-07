@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import io
 import json
 import math
 from pathlib import Path
@@ -12,6 +13,10 @@ from string import Template
 from typing import Any, Iterable, List
 
 import pandas as pd
+try:
+    from PIL import Image
+except ImportError:  # pragma: no cover - optional dependency
+    Image = None  # type: ignore[assignment]
 try:
     import carla
 except ImportError as exc:  # pragma: no cover
@@ -190,10 +195,22 @@ def load_bev_assets(bev_dir: Path | None, town: str) -> tuple[str | None, dict[s
     if not bev_path.exists():
         print(f"[WARN] Missing BEV preview for {town} at {bev_path}")  # noqa: T201
         return None, None
-    data = base64.b64encode(bev_path.read_bytes()).decode("ascii")
+    bev_bytes = bev_path.read_bytes()
+    if Image is not None:
+        try:
+            with Image.open(io.BytesIO(bev_bytes)) as img:
+                rotated = img.rotate(90, expand=True)
+                buffer = io.BytesIO()
+                rotated.save(buffer, format="PNG")
+                bev_bytes = buffer.getvalue()
+        except OSError as exc:  # pragma: no cover - file specific
+            print(f"[WARN] Failed to rotate BEV for {town}: {exc}")  # noqa: T201
+    else:  # pragma: no cover - optional dependency missing
+        print("[WARN] Pillow not installed; BEV rotation skipped.")  # noqa: T201
+    data = base64.b64encode(bev_bytes).decode("ascii")
     metadata = read_bev_metadata(bev_path)
     if metadata is None:
-        print(f"[WARN] No metadata for {town}; BEV overlay disabled.")  # noqa: T201
+        print(f"[WARN] No metadata for {town}; BEV preview disabled.")  # noqa: T201
     return f"data:image/png;base64,{data}", metadata
 
 
@@ -286,15 +303,38 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
             cursor: not-allowed;
         }
         .bev-preview {
-            margin: 10px 0 18px 0;
+            margin: 12px 0 18px 0;
             padding: 10px;
             border: 1px solid #2b2b2b;
             border-radius: 4px;
             background-color: #181818;
         }
-        .bev-preview h3 {
-            margin: 0 0 8px 0;
+        .bev-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        .bev-header h3 {
+            margin: 0;
             font-size: 16px;
+        }
+        .icon-button {
+            background: transparent;
+            color: #e5e5e5;
+            border: 1px solid #444;
+            border-radius: 4px;
+            padding: 4px 8px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .icon-button-large {
+            font-size: 20px;
+            padding: 4px 10px;
+        }
+        .icon-button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
         }
         #bevImage {
             width: 100%;
@@ -308,6 +348,11 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
             font-size: 13px;
             color: #8a8a8a;
             margin: 0;
+        }
+        .bev-open-notice {
+            font-size: 12px;
+            color: #8cb4ff;
+            margin: 4px 0 0 0;
         }
         .hidden {
             display: none !important;
@@ -410,6 +455,100 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
         }
         .lane-arrow.forward { color: #3498db; }
         .lane-arrow.opposite { color: #e74c3c; }
+        .static-model-panel {
+            margin: 16px 0;
+            padding: 10px;
+            border: 1px solid #2b2b2b;
+            border-radius: 4px;
+            background-color: #1a1a1a;
+        }
+        .static-model-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .static-model-header h3 {
+            margin: 0;
+        }
+        .static-model-hint {
+            font-size: 12px;
+            color: #8cb4ff;
+            margin: 8px 0;
+        }
+        .static-model-table td input {
+            width: 100%;
+        }
+        .static-model-table th {
+            font-size: 13px;
+        }
+        button.model-placement-active {
+            background-color: #1e5fd8;
+        }
+        .bev-overlay {
+            position: fixed;
+            top: 80px;
+            left: 80px;
+            width: 560px;
+            height: 560px;
+            background-color: #111;
+            border: 1px solid #2b2b2b;
+            border-radius: 6px;
+            box-shadow: 0 10px 35px rgba(0, 0, 0, 0.6);
+            z-index: 2000;
+            display: flex;
+            flex-direction: column;
+        }
+        .bev-overlay-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 12px;
+            cursor: move;
+            user-select: none;
+            border-bottom: 1px solid #2b2b2b;
+        }
+        .bev-overlay-header span {
+            font-weight: 600;
+        }
+        .bev-overlay-content {
+            flex: 1;
+            padding: 8px;
+            overflow: auto;
+            position: relative;
+        }
+        .bev-overlay-content img {
+            width: 100%;
+            height: auto;
+            border-radius: 4px;
+            transform-origin: center;
+            transition: transform 0.1s ease-out;
+        }
+        .bev-overlay-zoom-floating {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            z-index: 5;
+        }
+        .bev-overlay-zoom-floating button {
+            padding: 6px 10px;
+            font-size: 18px;
+            line-height: 1;
+            background-color: rgba(0, 0, 0, 0.6);
+        }
+        .bev-overlay-resize-handle {
+            position: absolute;
+            width: 18px;
+            height: 18px;
+            right: 4px;
+            bottom: 4px;
+            cursor: se-resize;
+            border-right: 2px solid #666;
+            border-bottom: 2px solid #666;
+        }
     </style>
 </head>
 <body>
@@ -459,9 +598,42 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
                 </span>
             </div>
 
+            <div class="static-model-panel">
+                <div class="static-model-header">
+                    <h3>Static 3D models</h3>
+                    <div>
+                        <button id="placeStaticModelBtn" class="secondary">Place 3D model</button>
+                        <button id="clearStaticModelsBtn" class="secondary">Clear models</button>
+                    </div>
+                </div>
+                <p id="staticModelHint" class="static-model-hint hidden">
+                    Click on the map to place the selected model. Use the table to fine-tune position and rotation.
+                </p>
+                <table class="static-model-table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>x [m]</th>
+                            <th>y [m]</th>
+                            <th>yaw [°]</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody id="staticModelTableBody">
+                        <tr><td colspan="5" style="text-align:center; padding:8px;">No static models yet.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
             <div class="bev-preview">
-                <h3>Town BEV preview</h3>
+                <div class="bev-header">
+                    <h3>Town BEV preview</h3>
+                    <button id="openBevFullscreen" class="icon-button icon-button-large" title="Open floating viewer">&#x2922;</button>
+                </div>
                 <img id="bevImage" class="hidden" alt="Bird's-eye preview" />
+                <p id="bevOpenNotice" class="bev-open-notice hidden">
+                    Preview shown in floating window.
+                </p>
                 <p id="bevFallback" class="bev-placeholder">
                     No BEV preview found for this town. Run tools/generate_carla_town_bev.py.
                 </p>
@@ -488,11 +660,39 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
         </div>
     </div>
 
+    <div id="bevOverlay" class="bev-overlay hidden">
+        <div id="bevOverlayHeader" class="bev-overlay-header">
+            <span id="bevOverlayTitle">Town BEV preview</span>
+            <button id="bevOverlayClose" class="icon-button" title="Close">&times;</button>
+        </div>
+        <div id="bevOverlayContent" class="bev-overlay-content">
+            <div class="bev-overlay-zoom-floating">
+                <button id="bevZoomInBtn" class="icon-button" title="Zoom in">+</button>
+                <button id="bevZoomOutBtn" class="icon-button" title="Zoom out">−</button>
+            </div>
+            <img id="bevOverlayImage" alt="Town BEV enlarged preview" />
+        </div>
+        <div id="bevOverlayResize" class="bev-overlay-resize-handle"></div>
+    </div>
+
     <script>
     const colorPalette = ${colors_json};
     const townsData = ${towns_json};
     const MIRROR_X = true;
     const MIRROR_Y = false;
+    const OVERLAY_MIN_WIDTH = 260;
+    const OVERLAY_DEFAULT_WIDTH = 600;
+    const ICON_EXPAND = '\u2922';
+    const ICON_COLLAPSE = '\u00D7';
+    const OVERLAY_MIN_SCALE = 0.1;
+    const OVERLAY_MAX_SCALE = 3.0;
+    const OVERLAY_SCALE_STEP = 0.1;
+    const STATIC_MODEL_PRESET = {
+        length: 12.0,
+        width: 3.0,
+        label: 'Truck',
+        blueprint: 'vehicle.carlamotors.carlacola'
+    };
 
     const townNames = Object.keys(townsData);
     let activeTown = ${initial_town};
@@ -511,6 +711,14 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
     let pendingHeading = null;
     let orientationPreview = null;
     let plotReady = false;
+    let bevOverlayDragState = null;
+    let bevOverlayResizeState = null;
+    let bevOverlayAspect = 1;
+    let bevOverlayOpen = false;
+    let bevOverlayScale = 1;
+    let staticModels = [];
+    let staticModelIdCounter = 0;
+    let modelPlacementMode = false;
 
     function nextActorName(kind) {
         if (kind === 'ego') {
@@ -560,49 +768,257 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
         renderXmlOutputs();
     }
 
-    function updateBevPreview(townData) {
-        if (townData && townData.bev_image) {
-            bevImageEl.src = townData.bev_image;
-            bevImageEl.classList.remove('hidden');
-            bevFallbackEl.classList.add('hidden');
+    function townHasBev(townName) {
+        const data = townsData[townName];
+        return !!(data && data.bev_image);
+    }
+
+    function syncBevPreviewVisibility(hasImage) {
+        if (!bevImageEl || !bevFallbackEl || !bevOpenNotice) return;
+        if (!hasImage) {
+            bevImageEl.classList.add('hidden');
+            bevOpenNotice.classList.add('hidden');
+            bevFallbackEl.classList.remove('hidden');
+            return;
+        }
+        bevFallbackEl.classList.add('hidden');
+        if (bevOverlayOpen) {
+            bevImageEl.classList.add('hidden');
+            bevOpenNotice.classList.remove('hidden');
         } else {
-            if (bevImageEl) {
-                bevImageEl.removeAttribute('src');
-                bevImageEl.classList.add('hidden');
-            }
-            if (bevFallbackEl) {
-                bevFallbackEl.classList.remove('hidden');
-            }
+            bevImageEl.classList.remove('hidden');
+            bevOpenNotice.classList.add('hidden');
         }
     }
 
-    function applyBevBackground(townData) {
-        if (!townData || !townData.bev_image || !townData.bev_bounds) {
-            layout.images = [];
+    function updateBevPreview(townData, townName) {
+        const hasImage = !!(townData && townData.bev_image);
+        if (bevImageEl) {
+            if (hasImage) {
+                bevImageEl.src = townData.bev_image;
+            } else {
+                bevImageEl.removeAttribute('src');
+            }
+        }
+        syncBevPreviewVisibility(hasImage);
+        if (!hasImage) {
+            closeBevOverlay();
+        }
+        updateBevButtonState(hasImage);
+        if (hasImage && bevOverlayTitle) {
+            bevOverlayTitle.textContent = townName + ' BEV';
+        }
+        if (hasImage && bevOverlay && !bevOverlay.classList.contains('hidden') && bevOverlayImage) {
+            bevOverlayImage.src = townData.bev_image;
+        }
+    }
+
+    function closeBevOverlay() {
+        if (!bevOverlay) return;
+        bevOverlay.classList.add('hidden');
+        bevOverlayDragState = null;
+        bevOverlayResizeState = null;
+        bevOverlayOpen = false;
+        const hasImage = townHasBev(activeTown);
+        syncBevPreviewVisibility(hasImage);
+        updateBevButtonState(hasImage);
+    }
+
+    function showBevOverlay() {
+        if (!bevOverlay || !bevOverlayImage) return;
+        const data = townsData[activeTown];
+        if (!data || !data.bev_image) return;
+        bevOverlayImage.src = data.bev_image;
+        if (bevOverlayTitle) {
+            bevOverlayTitle.textContent = activeTown + ' BEV';
+        }
+        if (!bevOverlay.dataset.positioned) {
+            bevOverlay.style.left = '80px';
+            bevOverlay.style.top = '80px';
+            bevOverlay.dataset.positioned = '1';
+        }
+        const storedWidth = bevOverlay.dataset.width ? parseFloat(bevOverlay.dataset.width) : OVERLAY_DEFAULT_WIDTH;
+        applyOverlaySize(storedWidth || OVERLAY_DEFAULT_WIDTH);
+        bevOverlay.classList.remove('hidden');
+        bevOverlayOpen = true;
+        syncBevPreviewVisibility(true);
+        updateBevButtonState(true);
+        setOverlayScale(bevOverlayScale || 1);
+    }
+
+    function clampOverlayScale(value) {
+        return Math.min(OVERLAY_MAX_SCALE, Math.max(OVERLAY_MIN_SCALE, value));
+    }
+
+    function updateOverlayZoomUI() {
+        if (bevOverlayImage) {
+            bevOverlayImage.style.transform = 'scale(' + bevOverlayScale + ')';
+        }
+    }
+
+    function setOverlayScale(scale) {
+        bevOverlayScale = clampOverlayScale(scale);
+        updateOverlayZoomUI();
+    }
+
+    function setModelPlacementMode(enabled) {
+        modelPlacementMode = enabled;
+        if (modelPlacementMode) {
+            resetOrientationState();
+        }
+        if (placeStaticModelBtn) {
+            placeStaticModelBtn.classList.toggle('model-placement-active', enabled);
+            placeStaticModelBtn.textContent = enabled ? 'Click map…' : 'Place 3D model';
+        }
+        if (staticModelHint) {
+            staticModelHint.classList.toggle('hidden', !enabled);
+        }
+    }
+
+    function createStaticModel(x, y) {
+        const model = {
+            id: staticModelIdCounter,
+            name: STATIC_MODEL_PRESET.label + ' ' + String(staticModelIdCounter + 1),
+            x,
+            y,
+            yaw: 0,
+            length: STATIC_MODEL_PRESET.length,
+            width: STATIC_MODEL_PRESET.width,
+            blueprint: STATIC_MODEL_PRESET.blueprint
+        };
+        staticModelIdCounter += 1;
+        staticModels.push(model);
+        renderStaticModelTable();
+        updatePlot();
+    }
+
+    function removeStaticModel(id) {
+        const idx = staticModels.findIndex(m => m.id === id);
+        if (idx >= 0) {
+            staticModels.splice(idx, 1);
+            renderStaticModelTable();
+            updatePlot();
+        }
+    }
+
+    function clearStaticModels() {
+        staticModels = [];
+        staticModelIdCounter = 0;
+        renderStaticModelTable();
+        updatePlot();
+    }
+
+    function updateStaticModelField(model, field, value) {
+        if (!Number.isFinite(value)) return;
+        model[field] = value;
+        updatePlot();
+        renderStaticModelTable();
+    }
+
+    function renderStaticModelTable() {
+        if (!staticModelTableBody) return;
+        staticModelTableBody.innerHTML = '';
+        if (clearStaticModelsBtn) {
+            clearStaticModelsBtn.disabled = staticModels.length === 0;
+        }
+        if (staticModels.length === 0) {
+            const row = document.createElement('tr');
+            const cell = document.createElement('td');
+            cell.colSpan = 5;
+            cell.style.textAlign = 'center';
+            cell.style.padding = '8px';
+            cell.textContent = 'No static models yet.';
+            row.appendChild(cell);
+            staticModelTableBody.appendChild(row);
             return;
         }
-        const bounds = townData.bev_bounds;
-        const width = bounds.max_x - bounds.min_x;
-        const height = bounds.max_y - bounds.min_y;
-        layout.images = [{
-            source: townData.bev_image,
-            xref: 'x',
-            yref: 'y',
-            x: bounds.min_x,
-            y: bounds.max_y,
-            sizex: width,
-            sizey: height,
-            xanchor: 'left',
-            yanchor: 'top',
-            sizing: 'stretch',
-            layer: 'below',
-            opacity: 0.9
-        }];
+        staticModels.forEach(model => {
+            const row = document.createElement('tr');
+
+            const nameCell = document.createElement('td');
+            nameCell.textContent = model.name;
+            row.appendChild(nameCell);
+
+            const xCell = document.createElement('td');
+            const xInput = document.createElement('input');
+            xInput.type = 'number';
+            xInput.step = '0.1';
+            xInput.value = model.x.toFixed(2);
+            xInput.addEventListener('change', () => {
+                updateStaticModelField(model, 'x', parseFloat(xInput.value));
+            });
+            xCell.appendChild(xInput);
+            row.appendChild(xCell);
+
+            const yCell = document.createElement('td');
+            const yInput = document.createElement('input');
+            yInput.type = 'number';
+            yInput.step = '0.1';
+            yInput.value = model.y.toFixed(2);
+            yInput.addEventListener('change', () => {
+                updateStaticModelField(model, 'y', parseFloat(yInput.value));
+            });
+            yCell.appendChild(yInput);
+            row.appendChild(yCell);
+
+            const yawCell = document.createElement('td');
+            const yawInput = document.createElement('input');
+            yawInput.type = 'number';
+            yawInput.step = '1';
+            yawInput.value = model.yaw.toFixed(1);
+            yawInput.addEventListener('change', () => {
+                updateStaticModelField(model, 'yaw', parseFloat(yawInput.value));
+            });
+            yawCell.appendChild(yawInput);
+            row.appendChild(yawCell);
+
+            const actionsCell = document.createElement('td');
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'danger';
+            removeBtn.textContent = 'Delete';
+            removeBtn.addEventListener('click', () => removeStaticModel(model.id));
+            actionsCell.appendChild(removeBtn);
+            row.appendChild(actionsCell);
+
+            staticModelTableBody.appendChild(row);
+        });
+    }
+
+    function computeStaticModelPolygon(model) {
+        const halfL = model.length * 0.5;
+        const halfW = model.width * 0.5;
+        const localPoints = [
+            {x: halfL, y: halfW},
+            {x: -halfL, y: halfW},
+            {x: -halfL, y: -halfW},
+            {x: halfL, y: -halfW}
+        ];
+        const rad = model.yaw * Math.PI / 180;
+        const cos = Math.cos(rad);
+        const sin = Math.sin(rad);
+        return localPoints.map(pt => ({
+            x: model.x + pt.x * cos - pt.y * sin,
+            y: model.y + pt.x * sin + pt.y * cos
+        }));
     }
 
     const mapDiv = document.getElementById('map');
     const bevImageEl = document.getElementById('bevImage');
     const bevFallbackEl = document.getElementById('bevFallback');
+    const bevOpenNotice = document.getElementById('bevOpenNotice');
+    const openBevBtn = document.getElementById('openBevFullscreen');
+    const staticModelHint = document.getElementById('staticModelHint');
+    const staticModelTableBody = document.getElementById('staticModelTableBody');
+    const placeStaticModelBtn = document.getElementById('placeStaticModelBtn');
+    const clearStaticModelsBtn = document.getElementById('clearStaticModelsBtn');
+    const bevOverlay = document.getElementById('bevOverlay');
+    const bevOverlayHeader = document.getElementById('bevOverlayHeader');
+    const bevOverlayTitle = document.getElementById('bevOverlayTitle');
+    const bevOverlayImage = document.getElementById('bevOverlayImage');
+    const bevOverlayClose = document.getElementById('bevOverlayClose');
+    const bevOverlayResize = document.getElementById('bevOverlayResize');
+    const bevZoomInBtn = document.getElementById('bevZoomInBtn');
+    const bevZoomOutBtn = document.getElementById('bevZoomOutBtn');
     const baseTrace = {
         x: [],
         y: [],
@@ -655,6 +1071,147 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
         plotReady = true;
     });
 
+    function updateBevButtonState(hasImage) {
+        if (!openBevBtn) return;
+        if (!hasImage) {
+            openBevBtn.disabled = true;
+            openBevBtn.textContent = ICON_EXPAND;
+            openBevBtn.title = 'Open floating viewer';
+            return;
+        }
+        openBevBtn.disabled = false;
+        if (bevOverlayOpen) {
+            openBevBtn.textContent = ICON_COLLAPSE;
+            openBevBtn.title = 'Hide floating viewer';
+        } else {
+            openBevBtn.textContent = ICON_EXPAND;
+            openBevBtn.title = 'Open floating viewer';
+        }
+    }
+
+    if (openBevBtn) {
+        openBevBtn.addEventListener('click', () => {
+            if (openBevBtn.disabled) return;
+            if (bevOverlayOpen) {
+                closeBevOverlay();
+            } else {
+                showBevOverlay();
+            }
+        });
+    }
+    if (bevOverlayClose) {
+        bevOverlayClose.addEventListener('click', closeBevOverlay);
+    }
+    window.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            if (bevOverlayOpen) {
+                closeBevOverlay();
+            } else if (modelPlacementMode) {
+                setModelPlacementMode(false);
+            }
+        }
+    });
+    if (bevOverlayHeader) {
+        bevOverlayHeader.addEventListener('mousedown', (event) => {
+            if (event.button !== 0 || !bevOverlay || bevOverlay.classList.contains('hidden')) return;
+            event.preventDefault();
+            const rect = bevOverlay.getBoundingClientRect();
+            bevOverlayDragState = {
+                offsetX: event.clientX - rect.left,
+                offsetY: event.clientY - rect.top
+            };
+        });
+    }
+    function applyOverlaySize(width) {
+        if (!bevOverlay) return;
+        const aspect = Math.max(bevOverlayAspect, 1e-3);
+        const clampedWidth = Math.max(OVERLAY_MIN_WIDTH, width);
+        bevOverlay.style.width = clampedWidth + 'px';
+        bevOverlay.style.height = Math.max(200, clampedWidth / aspect) + 'px';
+        bevOverlay.dataset.width = String(clampedWidth);
+    }
+
+    if (bevOverlayResize) {
+        bevOverlayResize.addEventListener('mousedown', (event) => {
+            if (event.button !== 0 || !bevOverlay || bevOverlay.classList.contains('hidden')) return;
+            event.preventDefault();
+            const rect = bevOverlay.getBoundingClientRect();
+            bevOverlayResizeState = {
+                startWidth: rect.width,
+                startX: event.clientX
+            };
+        });
+    }
+    window.addEventListener('mousemove', (event) => {
+        if (bevOverlayDragState && bevOverlay && !bevOverlay.classList.contains('hidden')) {
+            const left = event.clientX - bevOverlayDragState.offsetX;
+            const top = event.clientY - bevOverlayDragState.offsetY;
+            bevOverlay.style.left = Math.max(10, left) + 'px';
+            bevOverlay.style.top = Math.max(10, top) + 'px';
+        } else if (bevOverlayResizeState && bevOverlay && !bevOverlay.classList.contains('hidden')) {
+            const deltaX = event.clientX - bevOverlayResizeState.startX;
+            const newWidth = bevOverlayResizeState.startWidth + deltaX;
+            applyOverlaySize(newWidth);
+        }
+    });
+    if (bevOverlayImage) {
+        bevOverlayImage.addEventListener('load', () => {
+            const naturalWidth = bevOverlayImage.naturalWidth;
+            const naturalHeight = bevOverlayImage.naturalHeight;
+            if (naturalWidth > 0 && naturalHeight > 0) {
+                bevOverlayAspect = naturalWidth / naturalHeight;
+            } else {
+                bevOverlayAspect = 1;
+            }
+            if (bevOverlay && !bevOverlay.classList.contains('hidden')) {
+                const currentWidth = bevOverlay.dataset.width ? parseFloat(bevOverlay.dataset.width) : undefined;
+                applyOverlaySize(currentWidth || OVERLAY_DEFAULT_WIDTH);
+            }
+            updateOverlayZoomUI();
+        });
+        bevOverlayImage.addEventListener('wheel', (event) => {
+            event.preventDefault();
+            const factor = event.deltaY < 0 ? 1.1 : 0.9;
+            setOverlayScale(bevOverlayScale * factor);
+        }, {passive: false});
+    }
+
+    window.addEventListener('mouseup', () => {
+        bevOverlayDragState = null;
+        bevOverlayResizeState = null;
+    });
+
+    if (bevZoomInBtn) {
+        bevZoomInBtn.addEventListener('click', () => {
+            setOverlayScale(bevOverlayScale + OVERLAY_SCALE_STEP);
+        });
+    }
+
+    if (bevZoomOutBtn) {
+        bevZoomOutBtn.addEventListener('click', () => {
+            setOverlayScale(bevOverlayScale - OVERLAY_SCALE_STEP);
+        });
+    }
+
+    if (placeStaticModelBtn) {
+        placeStaticModelBtn.addEventListener('click', () => {
+            setModelPlacementMode(!modelPlacementMode);
+        });
+    }
+
+    if (clearStaticModelsBtn) {
+        clearStaticModelsBtn.addEventListener('click', () => {
+            if (staticModels.length === 0) return;
+            if (!confirm('Remove all static models?')) return;
+            clearStaticModels();
+            setModelPlacementMode(false);
+        });
+    }
+
+    renderStaticModelTable();
+    setModelPlacementMode(false);
+    updateOverlayZoomUI();
+
     mapDiv.addEventListener('mousemove', function(event) {
         if (!pendingHeading) return;
         const coords = screenToData(event);
@@ -670,6 +1227,11 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
         if (!data.points || data.points.length === 0) return;
         const pt = data.points[0];
         if (typeof pt.x !== 'number' || typeof pt.y !== 'number') return;
+        if (modelPlacementMode) {
+            createStaticModel(pt.x, pt.y);
+            setModelPlacementMode(false);
+            return;
+        }
         handlePlotClick(pt.x, pt.y);
     });
 
@@ -828,6 +1390,30 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
                     'yaw=%{customdata:.1f}°<extra></extra>'
             });
         });
+        staticModels.forEach(model => {
+            const corners = computeStaticModelPolygon(model);
+            if (corners.length === 0) return;
+            const xs = corners.map(pt => pt.x);
+            const ys = corners.map(pt => pt.y);
+            xs.push(corners[0].x);
+            ys.push(corners[0].y);
+            traces.push({
+                x: xs,
+                y: ys,
+                mode: 'lines',
+                fill: 'toself',
+                name: model.name + ' (STATIC)',
+                line: {color: 'rgba(255, 165, 0, 0.9)', width: 2},
+                fillcolor: 'rgba(255, 165, 0, 0.2)',
+                hovertemplate:
+                    model.name + '<br>' +
+                    'x=%{x:.2f} m<br>' +
+                    'y=%{y:.2f} m<br>' +
+                    'yaw=' + model.yaw.toFixed(1) + '°' +
+                    '<extra></extra>',
+                showlegend: false
+            });
+        });
         Plotly.react(mapDiv, traces, layout, config).then(() => {
             updateOrientationOverlay();
             updateOrientationPreviewMarker();
@@ -928,6 +1514,28 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
         lines.push('  </route>');
         lines.push('</routes>');
         return lines.join('');
+    }
+
+    function generateStaticModelXml(model) {
+        const routeId = document.getElementById('routeId').value || '0';
+        const blueprint = model.blueprint || STATIC_MODEL_PRESET.blueprint || 'vehicle.carlamotors.carlacola';
+        const lines = [
+            "<?xml version='1.0' encoding='utf-8'?>",
+            '<routes>',
+            '  <route id="' + routeId + '" town="' + activeTown + '" role="static" model="' + blueprint + '" length="' + model.length + '" width="' + model.width + '">',
+            '    <waypoint x="' + model.x.toFixed(6) + '" y="' + model.y.toFixed(6) + '" z="0.0" yaw="' + model.yaw.toFixed(6) + '" />',
+            '  </route>',
+            '</routes>'
+        ];
+        return lines.join('');
+    }
+
+    function sanitizeFileComponent(value) {
+        return (value || '')
+            .trim()
+            .replace(/[^a-zA-Z0-9._-]+/g, '_')
+            .replace(/_+/g, '_')
+            .replace(/^_+|_+$$/g, '') || 'item';
     }
 
     function formatWaypoint(wp, indent) {
@@ -1044,8 +1652,11 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
     function loadTown(name) {
         activeTown = name;
         const data = townsData[name];
-        updateBevPreview(data);
-        applyBevBackground(data);
+        updateBevPreview(data, name);
+        staticModels = [];
+        staticModelIdCounter = 0;
+        renderStaticModelTable();
+        setModelPlacementMode(false);
         baseTrace.x = data.x;
         baseTrace.y = data.y;
         baseTrace.marker.color = data.lane_colors || baseTrace.marker.color;
@@ -1163,6 +1774,10 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
         const actor = createActor('ego');
         actors.push(actor);
         activeActorId = actor.id;
+        staticModels = [];
+        staticModelIdCounter = 0;
+        renderStaticModelTable();
+        setModelPlacementMode(false);
         resetOrientationState();
         renderActorSelect();
         renderWaypointTable();
@@ -1178,17 +1793,26 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
             alert('No agents to export.');
             return;
         }
-        const scenarioName = document.getElementById('scenarioName').value || 'custom_scenario';
+        const scenarioNameRaw = document.getElementById('scenarioName').value || 'custom_scenario';
+        const scenarioNameSafe = sanitizeFileComponent(scenarioNameRaw);
         const zip = new JSZip();
 
         actors.forEach(actor => {
             const xmlText = generateXml(actor);
-            const fileName = scenarioName + '_' + actor.name + '.xml';
+            const actorSafe = sanitizeFileComponent(actor.name);
+            const fileName = scenarioNameSafe + '_' + actorSafe + '.xml';
+            zip.file(fileName, xmlText);
+        });
+
+        staticModels.forEach(model => {
+            const xmlText = generateStaticModelXml(model);
+            const modelSafe = sanitizeFileComponent(model.name + '_static');
+            const fileName = scenarioNameSafe + '_' + modelSafe + '.xml';
             zip.file(fileName, xmlText);
         });
 
         zip.generateAsync({type:'blob'}).then(content => {
-            saveAs(content, scenarioName + '_routes.zip');
+            saveAs(content, scenarioNameSafe + '_routes.zip');
         });
     });
 

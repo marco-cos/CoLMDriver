@@ -28,6 +28,7 @@ ROLE_DEFAULTS: Dict[str, Dict[str, object]] = {
     "pedestrian": {"model": "walker.pedestrian.0001", "speed": 1.5},
     "bicycle": {"model": "vehicle.diamondback.century", "speed": 4.0},
     "bike": {"model": "vehicle.diamondback.century", "speed": 4.0},
+    "static": {"model": "vehicle.carlamotors.carlacola", "speed": 0.0},
 }
 
 

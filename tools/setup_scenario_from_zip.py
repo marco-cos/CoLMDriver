@@ -100,6 +100,20 @@ def prepare_routes_from_zip(
         for member in members:
             data = archive.read(member.filename)
             route_id, town, role = parse_route_metadata(data)
+            model_attr = None
+            speed_attr = None
+            length_attr = None
+            width_attr = None
+            try:
+                xml_root = ET.fromstring(data)
+                route_node = xml_root.find("route")
+            except ET.ParseError:
+                route_node = None
+            if route_node is not None:
+                model_attr = route_node.get("model")
+                speed_attr = route_node.get("speed")
+                length_attr = route_node.get("length")
+                width_attr = route_node.get("width")
             target_dir = role_dirs.get(role)
             if target_dir is None:
                 target_dir = dest_dir / "actors" / role
@@ -116,6 +130,18 @@ def prepare_routes_from_zip(
                     "town": town,
                     "name": Path(member.filename).stem,
                     "kind": role,
+                    **(
+                        {
+                            k: v
+                            for k, v in (
+                                ("model", model_attr),
+                                ("speed", speed_attr),
+                                ("length", length_attr),
+                                ("width", width_attr),
+                            )
+                            if v is not None
+                        }
+                    ),
                 }
             )
 
