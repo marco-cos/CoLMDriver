@@ -11,11 +11,13 @@ Two modes are available:
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import queue
-import time
 import sys
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, List, NamedTuple, Tuple
 
@@ -217,7 +219,7 @@ def render_mask_bev(
     client: carla.Client,
     town: str,
     pixels_per_meter: float,
-) -> Image.Image:
+) -> tuple[Image.Image, MapBounds]:
     world = client.load_world(town)
     world.wait_for_tick()
 
@@ -230,7 +232,15 @@ def render_mask_bev(
     center_mask = mask_generator.centerlines_mask()
 
     rgb = compose_static_bev(road_mask, lane_mask, center_mask)
-    return Image.fromarray(rgb)
+
+    boundaries = mask_generator._map_boundaries
+    bounds = MapBounds(
+        min_x=boundaries.min_x,
+        max_x=boundaries.max_x,
+        min_y=boundaries.min_y,
+        max_y=boundaries.max_y,
+    )
+    return Image.fromarray(rgb), bounds
 
 
 class MapBounds(NamedTuple):
@@ -439,6 +449,34 @@ def capture_rendered_bev(
     )
 
 
+def save_bev_metadata(
+    image_path: Path,
+    bounds: MapBounds,
+    image: Image.Image,
+    *,
+    mode: str,
+) -> Path:
+    """Write a sidecar JSON file with spatial metadata for the BEV image."""
+    width = max(1, image.width)
+    height = max(1, image.height)
+    world_bounds = bounds._asdict()
+    metadata = {
+        "town": image_path.stem,
+        "mode": mode,
+        "image_width": width,
+        "image_height": height,
+        "world_bounds": world_bounds,
+        "meters_per_pixel": {
+            "x": (bounds.width) / width if width else None,
+            "y": (bounds.height) / height if height else None,
+        },
+        "generated_utc": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
+    meta_path = image_path.with_suffix(image_path.suffix + ".meta.json")
+    meta_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    return meta_path
+
+
 def main() -> None:
     args = parse_args()
 
@@ -474,7 +512,7 @@ def main() -> None:
 
         print(f"[INFO] Rendering BEV for {town} ...")
         if args.mode == "mask":
-            bev_image = render_mask_bev(client, town, args.pixels_per_meter)
+            bev_image, bounds = render_mask_bev(client, town, args.pixels_per_meter)
         else:
             capture = capture_rendered_bev(
                 client,
@@ -497,8 +535,10 @@ def main() -> None:
                 disable_postprocess=args.disable_postprocess,
             )
             bev_image = capture.image
+            bounds = capture.bounds
         bev_image = maybe_downscale(bev_image, args.downscale)
         bev_image.save(dst_path)
+        save_bev_metadata(dst_path, bounds, bev_image, mode=args.mode)
         print(f"[DONE] Saved {town} top-down map to {dst_path}")
 
 

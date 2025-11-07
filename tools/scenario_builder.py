@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import math
 from pathlib import Path
 from string import Template
-from typing import Iterable, List
+from typing import Any, Iterable, List
 
 import pandas as pd
 try:
@@ -85,6 +86,15 @@ def parse_args() -> argparse.Namespace:
         default=Path("scenario_builder.html"),
         help="Path to the generated HTML file.",
     )
+    parser.add_argument(
+        "--bev-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Optional directory with BEV PNGs (and *.meta.json sidecars) named <town>.png "
+            "(generated via tools/generate_carla_town_bev.py)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -114,7 +124,7 @@ def sample_town(world: carla.World, distance: float) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def compute_payload(df: pd.DataFrame) -> dict[str, float | list[float]]:
+def compute_payload(df: pd.DataFrame) -> dict[str, Any]:
     xmin, xmax = float(df["x"].min()), float(df["x"].max())
     ymin, ymax = float(df["y"].min()), float(df["y"].max())
     pad_x = max((xmax - xmin) * 0.05, 10.0)
@@ -144,7 +154,50 @@ def compute_payload(df: pd.DataFrame) -> dict[str, float | list[float]]:
     }
 
 
-def generate_html(town_payloads: dict[str, dict[str, float | list[float]]],
+def read_bev_metadata(bev_path: Path) -> dict[str, float] | None:
+    """Load the spatial bounds stored next to the BEV PNG."""
+    candidate_paths = [
+        bev_path.with_suffix(bev_path.suffix + ".meta.json"),
+        bev_path.with_suffix(".json"),
+    ]
+    for meta_path in candidate_paths:
+        if not meta_path.exists():
+            continue
+        try:
+            metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:  # pragma: no cover
+            print(f"[WARN] Failed to parse BEV metadata at {meta_path}: {exc}")  # noqa: T201
+            continue
+        bounds = metadata.get("world_bounds")
+        if isinstance(bounds, dict):
+            try:
+                return {
+                    "min_x": float(bounds["min_x"]),
+                    "max_x": float(bounds["max_x"]),
+                    "min_y": float(bounds["min_y"]),
+                    "max_y": float(bounds["max_y"]),
+                }
+            except (KeyError, TypeError, ValueError):
+                print(f"[WARN] Invalid world_bounds in {meta_path}")  # noqa: T201
+    return None
+
+
+def load_bev_assets(bev_dir: Path | None, town: str) -> tuple[str | None, dict[str, float] | None]:
+    """Return (image_data_uri, bounds_dict) for the BEV if available."""
+    if bev_dir is None:
+        return None, None
+    bev_path = bev_dir / f"{town}.png"
+    if not bev_path.exists():
+        print(f"[WARN] Missing BEV preview for {town} at {bev_path}")  # noqa: T201
+        return None, None
+    data = base64.b64encode(bev_path.read_bytes()).decode("ascii")
+    metadata = read_bev_metadata(bev_path)
+    if metadata is None:
+        print(f"[WARN] No metadata for {town}; BEV overlay disabled.")  # noqa: T201
+    return f"data:image/png;base64,{data}", metadata
+
+
+def generate_html(town_payloads: dict[str, dict[str, Any]],
                    distance: float,
                    colors: Iterable[str],
                    output_path: Path) -> None:
@@ -231,6 +284,33 @@ def generate_html(town_payloads: dict[str, dict[str, float | list[float]]],
         button:disabled {
             opacity: 0.5;
             cursor: not-allowed;
+        }
+        .bev-preview {
+            margin: 10px 0 18px 0;
+            padding: 10px;
+            border: 1px solid #2b2b2b;
+            border-radius: 4px;
+            background-color: #181818;
+        }
+        .bev-preview h3 {
+            margin: 0 0 8px 0;
+            font-size: 16px;
+        }
+        #bevImage {
+            width: 100%;
+            max-height: 320px;
+            object-fit: contain;
+            border-radius: 4px;
+            border: 1px solid #333;
+            background-color: #0f0f0f;
+        }
+        .bev-placeholder {
+            font-size: 13px;
+            color: #8a8a8a;
+            margin: 0;
+        }
+        .hidden {
+            display: none !important;
         }
         table {
             width: 100%;
@@ -379,6 +459,14 @@ def generate_html(town_payloads: dict[str, dict[str, float | list[float]]],
                 </span>
             </div>
 
+            <div class="bev-preview">
+                <h3>Town BEV preview</h3>
+                <img id="bevImage" class="hidden" alt="Bird's-eye preview" />
+                <p id="bevFallback" class="bev-placeholder">
+                    No BEV preview found for this town. Run tools/generate_carla_town_bev.py.
+                </p>
+            </div>
+
             <table id="waypointTable">
                 <thead>
                     <tr>
@@ -472,7 +560,49 @@ def generate_html(town_payloads: dict[str, dict[str, float | list[float]]],
         renderXmlOutputs();
     }
 
+    function updateBevPreview(townData) {
+        if (townData && townData.bev_image) {
+            bevImageEl.src = townData.bev_image;
+            bevImageEl.classList.remove('hidden');
+            bevFallbackEl.classList.add('hidden');
+        } else {
+            if (bevImageEl) {
+                bevImageEl.removeAttribute('src');
+                bevImageEl.classList.add('hidden');
+            }
+            if (bevFallbackEl) {
+                bevFallbackEl.classList.remove('hidden');
+            }
+        }
+    }
+
+    function applyBevBackground(townData) {
+        if (!townData || !townData.bev_image || !townData.bev_bounds) {
+            layout.images = [];
+            return;
+        }
+        const bounds = townData.bev_bounds;
+        const width = bounds.max_x - bounds.min_x;
+        const height = bounds.max_y - bounds.min_y;
+        layout.images = [{
+            source: townData.bev_image,
+            xref: 'x',
+            yref: 'y',
+            x: bounds.min_x,
+            y: bounds.max_y,
+            sizex: width,
+            sizey: height,
+            xanchor: 'left',
+            yanchor: 'top',
+            sizing: 'stretch',
+            layer: 'below',
+            opacity: 0.9
+        }];
+    }
+
     const mapDiv = document.getElementById('map');
+    const bevImageEl = document.getElementById('bevImage');
+    const bevFallbackEl = document.getElementById('bevFallback');
     const baseTrace = {
         x: [],
         y: [],
@@ -512,7 +642,8 @@ def generate_html(town_payloads: dict[str, dict[str, float | list[float]]],
         },
         dragmode: 'zoom',
         hovermode: 'closest',
-        margin: {l: 60, r: 20, t: 30, b: 60}
+        margin: {l: 60, r: 20, t: 30, b: 60},
+        images: []
     };
     const config = {
         responsive: true,
@@ -913,6 +1044,8 @@ def generate_html(town_payloads: dict[str, dict[str, float | list[float]]],
     function loadTown(name) {
         activeTown = name;
         const data = townsData[name];
+        updateBevPreview(data);
+        applyBevBackground(data);
         baseTrace.x = data.x;
         baseTrace.y = data.y;
         baseTrace.marker.color = data.lane_colors || baseTrace.marker.color;
@@ -1100,13 +1233,17 @@ def main() -> None:
     print("Available CARLA towns:", ", ".join(available))
     print("Building scenario builder for:", ", ".join(requested))
 
-    payloads: dict[str, dict[str, float | list[float]]] = {}
+    payloads: dict[str, dict[str, Any]] = {}
     for town in requested:
         print(f"Sampling {town} with spacing {args.distance:.2f} m ...")
         world = client.load_world(town)
         df = sample_town(world, args.distance)
         print(f"  collected {len(df)} reference points.")
-        payloads[town] = compute_payload(df)
+        payload = compute_payload(df)
+        bev_image, bev_bounds = load_bev_assets(args.bev_dir, town)
+        payload["bev_image"] = bev_image
+        payload["bev_bounds"] = bev_bounds
+        payloads[town] = payload
 
     generate_html(payloads, args.distance, COLOR_PALETTE, args.output)
 
