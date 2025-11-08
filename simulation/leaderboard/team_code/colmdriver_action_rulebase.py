@@ -928,6 +928,9 @@ class PnP_infer():
 		
 		realtime_mode = os.environ.get('REALTIME_MODE', '0')
 		self.realtime = True if realtime_mode=='1' else False
+		self.negotiation_enabled = os.environ.get("COLMDRIVER_DISABLE_NEGOTIATION", "0") != "1"
+		if not self.negotiation_enabled:
+			print("[INFO] Negotiation disabled via COLMDRIVER_DISABLE_NEGOTIATION.")
 
 	def judge_speed(self, i):
 		# our trained planning model set a reversed FASTER and KEEP, so need to align back the index.
@@ -1046,6 +1049,9 @@ class PnP_infer():
 
 	def form_comm_group(self, car_data_raw, step):
 		'''construct communication graph, agent i and j will communicate if their safety score is below a threshold'''
+		if not self.negotiation_enabled:
+			return [], []
+
 		def find_connected_vehicles(i):
 			'''Use DFS to find all connected vehicles'''
 			stack = [i]

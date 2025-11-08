@@ -6,12 +6,64 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
 
 from setup_scenario_from_zip import prepare_routes_from_zip, parse_route_metadata
+
+
+NIGHT_WEATHER = {
+    "cloudiness": 20.0,
+    "precipitation": 0.0,
+    "precipitation_deposits": 0.0,
+    "wind_intensity": 5.0,
+    "sun_azimuth_angle": 300.0,
+    "sun_altitude_angle": -15.0,
+    "wetness": 10.0,
+    "fog_distance": 80.0,
+    "fog_density": 5.0,
+    "fog_falloff": 2.0,
+}
+
+CLOUDY_WEATHER = {
+    "cloudiness": 100.0,
+    "precipitation": 15.0,
+    "precipitation_deposits": 25.0,
+    "wind_intensity": 45.0,
+    "sun_azimuth_angle": 210.0,
+    "sun_altitude_angle": 20.0,
+    "wetness": 35.0,
+    "fog_distance": 70.0,
+    "fog_density": 18.0,
+    "fog_falloff": 1.5,
+}
+
+DEFAULT_NPC_PARAMETER = (
+    "simulation/leaderboard/leaderboard/scenarios/scenario_parameter_Interdrive_npc.yaml"
+)
+
+
+@dataclass
+class VariantSpec:
+    label: str
+    suffix: str | None
+    description: str
+    weather: dict[str, float] | None = None
+    scenario_parameter: str | None = None
+
+
+@dataclass
+class NegotiationMode:
+    label: str
+    suffix: str | None
+    description: str
+    disable_comm: bool
 
 
 def parse_args() -> argparse.Namespace:
@@ -115,6 +167,36 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print the command and exit without running the evaluator.",
     )
+    parser.add_argument(
+        "--add-night",
+        action="store_true",
+        help="Also evaluate the same scenario with a forced night-time weather override.",
+    )
+    parser.add_argument(
+        "--add-cloudy",
+        action="store_true",
+        help="Also evaluate the same scenario under heavy-cloud conditions.",
+    )
+    parser.add_argument(
+        "--add-npcs",
+        action="store_true",
+        help="Also evaluate with CARLA's random traffic/pedestrians enabled.",
+    )
+    parser.add_argument(
+        "--npc-scenario-parameter",
+        default=DEFAULT_NPC_PARAMETER,
+        help=(
+            "Scenario parameter YAML to use whenever --add-npcs is supplied "
+            f"(default: {DEFAULT_NPC_PARAMETER})."
+        ),
+    )
+    parser.add_argument(
+        "--add-no-negotiation",
+        action="store_true",
+        help=(
+            "For every scenario variant, also run a copy with inter-ego negotiation disabled."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -158,6 +240,39 @@ def read_manifest(routes_dir: Path) -> tuple[Path | None, Dict[str, List[Dict[st
     return manifest_path, data
 
 
+def apply_weather_override(routes_dir: Path, weather: dict[str, float]) -> None:
+    """Inject/replace weather blocks in every route XML under routes_dir."""
+    for xml_path in routes_dir.rglob("*.xml"):
+        try:
+            tree = ET.parse(xml_path)
+        except ET.ParseError:
+            continue
+        root = tree.getroot()
+        route_nodes = list(root.iter("route"))
+        if not route_nodes:
+            continue
+        for route in route_nodes:
+            for weather_node in list(route.findall("weather")):
+                route.remove(weather_node)
+            weather_node = ET.SubElement(route, "weather")
+            for key, value in weather.items():
+                weather_node.set(key, f"{value}")
+        tree.write(xml_path, encoding="utf-8", xml_declaration=True)
+
+
+def clone_routes_with_weather_override(
+    src: Path, weather: dict[str, float] | None
+) -> tuple[Path, tempfile.TemporaryDirectory | None]:
+    """Create a temporary copy of routes with an optional weather override applied."""
+    if weather is None:
+        return src, None
+    temp_dir = tempfile.TemporaryDirectory(prefix=f"{src.name}_")
+    clone_root = Path(temp_dir.name) / src.name
+    shutil.copytree(src, clone_root)
+    apply_weather_override(clone_root, weather)
+    return clone_root, temp_dir
+
+
 def main() -> None:
     args = parse_args()
     repo_root = Path(__file__).resolve().parents[1]
@@ -196,41 +311,82 @@ def main() -> None:
     scenario_name = scenario_name or routes_dir.name
     results_tag = args.results_tag or scenario_name
 
+    variants: list[VariantSpec] = [
+        VariantSpec(
+            label="baseline",
+            suffix=None,
+            description="Default daylight / clear run.",
+            scenario_parameter=args.scenario_parameter,
+            weather=None,
+        )
+    ]
+    if args.add_night:
+        variants.append(
+            VariantSpec(
+                label="night",
+                suffix="night",
+                description="Night-time lighting (sun altitude override).",
+                weather=NIGHT_WEATHER,
+                scenario_parameter=args.scenario_parameter,
+            )
+        )
+    if args.add_cloudy:
+        variants.append(
+            VariantSpec(
+                label="cloudy",
+                suffix="cloudy",
+                description="Daylight with heavy cloud cover.",
+                weather=CLOUDY_WEATHER,
+                scenario_parameter=args.scenario_parameter,
+            )
+        )
+    if args.add_npcs:
+        variants.append(
+            VariantSpec(
+                label="npcs",
+                suffix="npcs",
+                description="Interdrive NPC parameter file (random traffic/pedestrians).",
+                scenario_parameter=args.npc_scenario_parameter,
+                weather=None,
+            )
+        )
+
+    negotiation_modes: list[NegotiationMode] = [
+        NegotiationMode(
+            label="negotiation",
+            suffix=None,
+            description="Negotiation enabled (default).",
+            disable_comm=False,
+        )
+    ]
+    if args.add_no_negotiation:
+        negotiation_modes.append(
+            NegotiationMode(
+                label="no-negotiation",
+                suffix="nonego",
+                description="Negotiation disabled; egos act independently.",
+                disable_comm=True,
+            )
+        )
+
     carla_root = repo_root / "carla"
     leaderboard_root = repo_root / "simulation" / "leaderboard"
     scenario_runner_root = repo_root / "simulation" / "scenario_runner"
     data_root = repo_root / "simulation" / "assets" / "v2xverse_debug"
 
-    env = os.environ.copy()
-    env["CARLA_ROOT"] = str(carla_root)
-    env["LEADERBOARD_ROOT"] = str(leaderboard_root)
-    env["SCENARIO_RUNNER_ROOT"] = str(scenario_runner_root)
-    env["DATA_ROOT"] = str(data_root)
-    env["ROUTES"] = str(routes_dir)
-    env["ROUTES_DIR"] = str(routes_dir)
-    env.setdefault("COLMDRIVER_OFFLINE", "1")
-    if manifest_path and manifest_path.exists():
-        env["CUSTOM_ACTOR_MANIFEST"] = str(manifest_path)
-        actors_root = manifest_path.parent / "actors"
-        if actors_root.exists():
-            env["CUSTOM_ACTOR_ROOT"] = str(actors_root)
+    env_template = os.environ.copy()
+    env_template["CARLA_ROOT"] = str(carla_root)
+    env_template["LEADERBOARD_ROOT"] = str(leaderboard_root)
+    env_template["SCENARIO_RUNNER_ROOT"] = str(scenario_runner_root)
+    env_template["DATA_ROOT"] = str(data_root)
+    env_template.setdefault("COLMDRIVER_OFFLINE", "1")
 
-    append_pythonpath(env, scenario_runner_root)
-    append_pythonpath(env, leaderboard_root)
-    append_pythonpath(env, leaderboard_root / "team_code")
-    append_pythonpath(env, carla_root / "PythonAPI")
-    append_pythonpath(env, carla_root / "PythonAPI" / "carla")
-    append_pythonpath(env, find_carla_egg(carla_root))
-
-    result_root = repo_root / "results" / "results_driving_custom" / results_tag
-    save_path = result_root / "image"
-    checkpoint_endpoint = result_root / "results.json"
-    save_path.mkdir(parents=True, exist_ok=True)
-    checkpoint_endpoint.parent.mkdir(parents=True, exist_ok=True)
-
-    env["RESULT_ROOT"] = str(result_root)
-    env["SAVE_PATH"] = str(save_path)
-    env["CHECKPOINT_ENDPOINT"] = str(checkpoint_endpoint)
+    append_pythonpath(env_template, scenario_runner_root)
+    append_pythonpath(env_template, leaderboard_root)
+    append_pythonpath(env_template, leaderboard_root / "team_code")
+    append_pythonpath(env_template, carla_root / "PythonAPI")
+    append_pythonpath(env_template, carla_root / "PythonAPI" / "carla")
+    append_pythonpath(env_template, find_carla_egg(carla_root))
 
     tm_port = args.tm_port or (args.port + 5)
 
@@ -239,46 +395,9 @@ def main() -> None:
         / "leaderboard"
         / "leaderboard_evaluator_parameter.py"
     )
-    cmd: List[str] = [
-        sys.executable,
-        str(evaluator),
-        "--routes_dir",
-        str(routes_dir),
-        "--ego-num",
-        str(ego_num),
-        "--scenario_parameter",
-        str((repo_root / args.scenario_parameter).resolve()),
-        "--agent",
-        str((repo_root / args.agent).resolve()),
-        "--agent-config",
-        str((repo_root / args.agent_config).resolve()),
-        "--port",
-        str(args.port),
-        "--trafficManagerPort",
-        str(tm_port),
-        "--scenarios",
-        str((repo_root / args.scenarios).resolve()),
-        "--repetitions",
-        str(args.repetitions),
-        "--track",
-        args.track,
-        "--checkpoint",
-        str(checkpoint_endpoint),
-        "--debug",
-        "1" if args.debug else "0",
-        "--record",
-        args.record,
-        "--resume",
-        "1" if args.resume else "0",
-        "--carlaProviderSeed",
-        str(args.carla_seed),
-        "--trafficManagerSeed",
-        str(args.traffic_seed),
-        "--skip_existed",
-        "1" if args.skip_existed else "0",
-        "--timeout",
-        str(args.timeout),
-    ]
+    agent_path = (repo_root / args.agent).resolve()
+    agent_config_path = (repo_root / args.agent_config).resolve()
+    scenarios_json = (repo_root / args.scenarios).resolve()
 
     print("Scenario directory:", routes_dir)
     print("Ego vehicles:", ego_num)
@@ -308,14 +427,118 @@ def main() -> None:
             )
     if manifest_path:
         print("Actor manifest:", manifest_path)
-    print("Results will be stored under:", result_root)
-    print("\nCommand:")
-    print("  " + " ".join(cmd))
 
-    if args.dry_run:
-        return
+    run_matrix = [(spec, nego) for spec in variants for nego in negotiation_modes]
+    if run_matrix:
+        print("\nConfigured evaluation variants:")
+        for spec, nego in run_matrix:
+            base_name = spec.suffix or "baseline"
+            mode_note = " (no negotiation)" if nego.disable_comm else ""
+            print(f"  - {base_name}{mode_note}: {spec.description} [{nego.description}]")
 
-    subprocess.run(cmd, check=True, env=env)
+    for spec, negotiation in run_matrix:
+        variant_routes_dir, temp_dir = clone_routes_with_weather_override(routes_dir, spec.weather)
+        try:
+            env = env_template.copy()
+            env["ROUTES"] = str(variant_routes_dir)
+            env["ROUTES_DIR"] = str(variant_routes_dir)
+
+            variant_manifest = variant_routes_dir / "actors_manifest.json"
+            if variant_manifest.exists():
+                env["CUSTOM_ACTOR_MANIFEST"] = str(variant_manifest)
+                actors_root = variant_manifest.parent / "actors"
+                if actors_root.exists():
+                    env["CUSTOM_ACTOR_ROOT"] = str(actors_root)
+                else:
+                    env.pop("CUSTOM_ACTOR_ROOT", None)
+            else:
+                env.pop("CUSTOM_ACTOR_MANIFEST", None)
+                env.pop("CUSTOM_ACTOR_ROOT", None)
+
+            if negotiation.disable_comm:
+                env["COLMDRIVER_DISABLE_NEGOTIATION"] = "1"
+            else:
+                env.pop("COLMDRIVER_DISABLE_NEGOTIATION", None)
+
+            suffix_parts: list[str] = []
+            if spec.suffix:
+                suffix_parts.append(spec.suffix)
+            if negotiation.suffix:
+                suffix_parts.append(negotiation.suffix)
+            variant_suffix = "_".join(suffix_parts) if suffix_parts else None
+            variant_results_tag = results_tag if not variant_suffix else f"{results_tag}_{variant_suffix}"
+            result_root = repo_root / "results" / "results_driving_custom" / variant_results_tag
+            save_path = result_root / "image"
+            checkpoint_endpoint = result_root / "results.json"
+            save_path.mkdir(parents=True, exist_ok=True)
+            checkpoint_endpoint.parent.mkdir(parents=True, exist_ok=True)
+
+            env["RESULT_ROOT"] = str(result_root)
+            env["SAVE_PATH"] = str(save_path)
+            env["CHECKPOINT_ENDPOINT"] = str(checkpoint_endpoint)
+
+            scenario_parameter_rel = spec.scenario_parameter or args.scenario_parameter
+            scenario_parameter_path = (repo_root / scenario_parameter_rel).resolve()
+
+            cmd: List[str] = [
+                sys.executable,
+                str(evaluator),
+                "--routes_dir",
+                str(variant_routes_dir),
+                "--ego-num",
+                str(ego_num),
+                "--scenario_parameter",
+                str(scenario_parameter_path),
+                "--agent",
+                str(agent_path),
+                "--agent-config",
+                str(agent_config_path),
+                "--port",
+                str(args.port),
+                "--trafficManagerPort",
+                str(tm_port),
+                "--scenarios",
+                str(scenarios_json),
+                "--repetitions",
+                str(args.repetitions),
+                "--track",
+                args.track,
+                "--checkpoint",
+                str(checkpoint_endpoint),
+                "--debug",
+                "1" if args.debug else "0",
+                "--record",
+                args.record,
+                "--resume",
+                "1" if args.resume else "0",
+                "--carlaProviderSeed",
+                str(args.carla_seed),
+                "--trafficManagerSeed",
+                str(args.traffic_seed),
+                "--skip_existed",
+                "1" if args.skip_existed else "0",
+                "--timeout",
+                str(args.timeout),
+            ]
+
+            variant_name = spec.suffix or "baseline"
+            if negotiation.disable_comm:
+                variant_name = f"{variant_name} (no negotiation)"
+            print(f"\n=== Running variant: {variant_name} ===")
+            print("Scenario parameter:", scenario_parameter_path)
+            if spec.weather:
+                print("Weather override applied via:", variant_routes_dir)
+            print("Results will be stored under:", result_root)
+            print("Command:")
+            print("  " + " ".join(cmd))
+
+            if args.dry_run:
+                continue
+
+            subprocess.run(cmd, check=True, env=env)
+        finally:
+            if temp_dir is not None:
+                temp_dir.cleanup()
 
 
 if __name__ == "__main__":
