@@ -93,7 +93,12 @@ def prepare_routes_from_zip(
         members = [
             m
             for m in archive.infolist()
-            if not m.is_dir() and m.filename.lower().endswith(".xml")
+            if (
+                not m.is_dir()
+                and m.filename.lower().endswith(".xml")
+                and "__MACOSX/" not in m.filename
+                and not Path(m.filename).name.startswith("._")
+            )
         ]
         if not members:
             raise RuntimeError("ZIP does not contain any XML route files.")
