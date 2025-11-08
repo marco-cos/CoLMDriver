@@ -394,6 +394,21 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
             cursor: pointer;
             font-weight: 600;
         }
+        summary.xml-summary {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+        .xml-summary-label {
+            flex: 1;
+            min-width: 0;
+        }
+        .xml-remove-btn {
+            padding: 2px 8px;
+            line-height: 1;
+            font-size: 14px;
+        }
         .info {
             margin-bottom: 12px;
             font-size: 13px;
@@ -455,6 +470,37 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
         }
         .lane-arrow.forward { color: #3498db; }
         .lane-arrow.opposite { color: #e74c3c; }
+        .offset-panel {
+            margin: 12px 0 18px 0;
+            padding: 10px;
+            border: 1px solid #2b2b2b;
+            border-radius: 4px;
+            background-color: #1a1a1a;
+        }
+        .offset-panel h3 {
+            margin: 0 0 8px 0;
+        }
+        .offset-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 6px 12px;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .offset-grid label {
+            margin: 0;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .offset-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .waypoint-coord-input {
+            width: 100%;
+            box-sizing: border-box;
+        }
         .static-model-panel {
             margin: 16px 0;
             padding: 10px;
@@ -598,6 +644,20 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
                 </span>
             </div>
 
+            <div class="offset-panel">
+                <h3>Waypoint offset</h3>
+                <div class="offset-grid">
+                    <label for="offsetXInput">&#916;x [m]</label>
+                    <input type="number" id="offsetXInput" step="0.1" value="0" />
+                    <label for="offsetYInput">&#916;y [m]</label>
+                    <input type="number" id="offsetYInput" step="0.1" value="0" />
+                </div>
+                <div class="offset-actions">
+                    <button id="applyOffsetBtn" class="secondary">Apply to active agent</button>
+                    <button id="resetOffsetInputs" class="secondary">Reset offsets</button>
+                </div>
+            </div>
+
             <div class="static-model-panel">
                 <div class="static-model-header">
                     <h3>Static 3D models</h3>
@@ -693,6 +753,7 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
         label: 'Truck',
         blueprint: 'vehicle.carlamotors.carlacola'
     };
+    const PLOTLY_CLICK_FLAG = '__scenarioBuilderPlotlyClick';
 
     const townNames = Object.keys(townsData);
     let activeTown = ${initial_town};
@@ -749,7 +810,8 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
             kind: kind,
             name: nextActorName(kind),
             color: color,
-            waypoints: []
+            waypoints: [],
+            offsetTotal: {x: 0, y: 0}
         };
         actorIdCounter += 1;
         return actor;
@@ -759,6 +821,27 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
         return actors.find(a => a.id === activeActorId) || null;
     }
 
+    function ensureActorOffset(actor) {
+        if (!actor) return null;
+        if (!actor.offsetTotal) {
+            actor.offsetTotal = {x: 0, y: 0};
+        }
+        return actor.offsetTotal;
+    }
+
+    function hasActiveOffset(actor) {
+        const offset = ensureActorOffset(actor);
+        if (!offset) return false;
+        return Math.abs(offset.x) > 1e-6 || Math.abs(offset.y) > 1e-6;
+    }
+
+    function resetActorOffsetState(actor) {
+        const offset = ensureActorOffset(actor);
+        if (!offset) return;
+        offset.x = 0;
+        offset.y = 0;
+    }
+
     function setActiveActor(id) {
         resetOrientationState();
         activeActorId = id;
@@ -766,6 +849,63 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
         renderWaypointTable();
         updatePlot();
         renderXmlOutputs();
+    }
+
+    function updateWaypointActionButtons() {
+        const actor = getActiveActor();
+        const hasWaypoints = !!(actor && actor.waypoints.length > 0);
+        if (clearActorBtn) {
+            clearActorBtn.disabled = !hasWaypoints;
+        }
+        if (applyOffsetBtn) {
+            applyOffsetBtn.disabled = !hasWaypoints;
+        }
+        if (resetOffsetBtn) {
+            resetOffsetBtn.disabled = !hasWaypoints || !hasActiveOffset(actor);
+        }
+    }
+
+    function removeActorById(id) {
+        const idx = actors.findIndex(a => a.id === id);
+        if (idx === -1) return false;
+        actors.splice(idx, 1);
+        const fallback = actors[idx] || actors[idx - 1] || actors[0] || null;
+        const nextId = fallback ? fallback.id : null;
+        setActiveActor(nextId);
+        return true;
+    }
+
+    function offsetActiveActorWaypoints(dx, dy) {
+        const actor = getActiveActor();
+        if (!actor || actor.waypoints.length === 0) return false;
+        if (!Number.isFinite(dx) || !Number.isFinite(dy)) return false;
+        const offset = ensureActorOffset(actor);
+        actor.waypoints.forEach(wp => {
+            wp.x += dx;
+            wp.y += dy;
+        });
+        if (offset) {
+            offset.x += dx;
+            offset.y += dy;
+        }
+        return true;
+    }
+
+    function resetActiveActorOffset() {
+        const actor = getActiveActor();
+        if (!actor || actor.waypoints.length === 0) return false;
+        const offset = ensureActorOffset(actor);
+        if (!offset) return false;
+        if (Math.abs(offset.x) < 1e-6 && Math.abs(offset.y) < 1e-6) {
+            return false;
+        }
+        actor.waypoints.forEach(wp => {
+            wp.x -= offset.x;
+            wp.y -= offset.y;
+        });
+        offset.x = 0;
+        offset.y = 0;
+        return true;
     }
 
     function townHasBev(townName) {
@@ -1019,6 +1159,11 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
     const bevOverlayResize = document.getElementById('bevOverlayResize');
     const bevZoomInBtn = document.getElementById('bevZoomInBtn');
     const bevZoomOutBtn = document.getElementById('bevZoomOutBtn');
+    const clearActorBtn = document.getElementById('clearActorBtn');
+    const offsetXInput = document.getElementById('offsetXInput');
+    const offsetYInput = document.getElementById('offsetYInput');
+    const applyOffsetBtn = document.getElementById('applyOffsetBtn');
+    const resetOffsetBtn = document.getElementById('resetOffsetInputs');
     const baseTrace = {
         x: [],
         y: [],
@@ -1212,6 +1357,37 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
     setModelPlacementMode(false);
     updateOverlayZoomUI();
 
+    if (applyOffsetBtn) {
+        applyOffsetBtn.addEventListener('click', () => {
+            const dx = offsetXInput ? parseFloat(offsetXInput.value) : 0;
+            const dy = offsetYInput ? parseFloat(offsetYInput.value) : 0;
+            if (!Number.isFinite(dx) || !Number.isFinite(dy)) {
+                alert('Offsets must be numeric values.');
+                return;
+            }
+            if (!offsetActiveActorWaypoints(dx, dy)) {
+                alert('No waypoints available for the active agent.');
+                return;
+            }
+            renderWaypointTable();
+            updatePlot();
+            renderXmlOutputs();
+        });
+    }
+
+    if (resetOffsetBtn) {
+        resetOffsetBtn.addEventListener('click', () => {
+            const changed = resetActiveActorOffset();
+            if (changed) {
+                renderWaypointTable();
+                updatePlot();
+                renderXmlOutputs();
+            }
+            if (offsetXInput) offsetXInput.value = '0';
+            if (offsetYInput) offsetYInput.value = '0';
+        });
+    }
+
     mapDiv.addEventListener('mousemove', function(event) {
         if (!pendingHeading) return;
         const coords = screenToData(event);
@@ -1222,6 +1398,9 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
     });
 
     mapDiv.on('plotly_click', function(data) {
+        if (data.event) {
+            data.event[PLOTLY_CLICK_FLAG] = true;
+        }
         const evt = data.event || {};
         if (evt.button && evt.button !== 0) return;
         if (!data.points || data.points.length === 0) return;
@@ -1234,6 +1413,24 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
         }
         handlePlotClick(pt.x, pt.y);
     });
+
+    mapDiv.addEventListener('click', function(event) {
+        if (!(event instanceof MouseEvent)) return;
+        if (event.button !== 0) return;
+        if (event.detail && event.detail > 1) return;
+        if (event[PLOTLY_CLICK_FLAG]) return;
+        if (modelPlacementMode) return;
+        const target = event.target;
+        if (target && typeof target.closest === 'function') {
+            if (target.closest('.modebar')) return;
+            if (target.closest('.scatterlayer')) return;
+        }
+        const actor = getActiveActor();
+        if (!actor || actor.kind !== 'pedestrian') return;
+        const coords = screenToData(event);
+        if (!coords) return;
+        handlePlotClick(coords.x, coords.y);
+    }, true);
 
     function computeHeadingDegrees(origin, target) {
         return Math.atan2(target.y - origin.y, target.x - origin.x) * 180 / Math.PI;
@@ -1430,9 +1627,8 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
             select.appendChild(opt);
         });
         select.disabled = actors.length === 0;
-        document.getElementById('removeActorBtn').disabled = actors.length <= 1;
-        const active = getActiveActor();
-        document.getElementById('clearActorBtn').disabled = !active || active.waypoints.length === 0;
+        document.getElementById('removeActorBtn').disabled = actors.length === 0;
+        updateWaypointActionButtons();
     }
 
     function renderWaypointTable() {
@@ -1448,7 +1644,7 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
             cell.textContent = 'No waypoints yet.';
             row.appendChild(cell);
             tbody.appendChild(row);
-            document.getElementById('clearActorBtn').disabled = true;
+            updateWaypointActionButtons();
             return;
         }
 
@@ -1460,11 +1656,41 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
             row.appendChild(cellIdx);
 
             const cellX = document.createElement('td');
-            cellX.textContent = wp.x.toFixed(3);
+            const xInput = document.createElement('input');
+            xInput.type = 'number';
+            xInput.step = '0.01';
+            xInput.className = 'waypoint-coord-input';
+            xInput.value = wp.x.toFixed(3);
+            xInput.addEventListener('change', () => {
+                const val = parseFloat(xInput.value);
+                if (!Number.isFinite(val)) {
+                    xInput.value = wp.x.toFixed(3);
+                    return;
+                }
+                wp.x = val;
+                updatePlot();
+                renderXmlOutputs();
+            });
+            cellX.appendChild(xInput);
             row.appendChild(cellX);
 
             const cellY = document.createElement('td');
-            cellY.textContent = wp.y.toFixed(3);
+            const yInput = document.createElement('input');
+            yInput.type = 'number';
+            yInput.step = '0.01';
+            yInput.className = 'waypoint-coord-input';
+            yInput.value = wp.y.toFixed(3);
+            yInput.addEventListener('change', () => {
+                const val = parseFloat(yInput.value);
+                if (!Number.isFinite(val)) {
+                    yInput.value = wp.y.toFixed(3);
+                    return;
+                }
+                wp.y = val;
+                updatePlot();
+                renderXmlOutputs();
+            });
+            cellY.appendChild(yInput);
             row.appendChild(cellY);
 
             const cellYaw = document.createElement('td');
@@ -1497,7 +1723,7 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
 
             tbody.appendChild(row);
         });
-        document.getElementById('clearActorBtn').disabled = false;
+        updateWaypointActionButtons();
     }
 
     function generateXml(actor) {
@@ -1579,7 +1805,22 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
             const details = document.createElement('details');
             details.open = actors.length <= 1;
             const summary = document.createElement('summary');
-            summary.textContent = actor.name + ' [' + actor.kind.toUpperCase() + '] (' + actor.waypoints.length + ' waypoints)';
+            summary.className = 'xml-summary';
+            const summaryLabel = document.createElement('span');
+            summaryLabel.className = 'xml-summary-label';
+            summaryLabel.textContent = actor.name + ' [' + actor.kind.toUpperCase() + '] (' + actor.waypoints.length + ' waypoints)';
+            const summaryRemoveBtn = document.createElement('button');
+            summaryRemoveBtn.type = 'button';
+            summaryRemoveBtn.className = 'icon-button danger xml-remove-btn';
+            summaryRemoveBtn.textContent = '×';
+            summaryRemoveBtn.title = 'Delete this agent';
+            summaryRemoveBtn.addEventListener('click', (evt) => {
+                evt.preventDefault();
+                evt.stopPropagation();
+                removeActorById(actor.id);
+            });
+            summary.appendChild(summaryLabel);
+            summary.appendChild(summaryRemoveBtn);
             details.appendChild(summary);
 
             const textarea = document.createElement('textarea');
@@ -1604,6 +1845,7 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
                     try {
                         const waypoints = parseXmlToWaypoints(textarea.value);
                         actor.waypoints = waypoints;
+                        resetActorOffsetState(actor);
                         resetOrientationState();
                         renderWaypointTable();
                         updatePlot();
@@ -1742,24 +1984,23 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
     });
 
     document.getElementById('removeActorBtn').addEventListener('click', () => {
-        if (actors.length <= 1) return;
-        resetOrientationState();
-        const actor = getActiveActor();
-        const idx = actors.findIndex(a => a.id === actor.id);
-        actors.splice(idx, 1);
-        const next = actors[Math.max(0, idx - 1)];
-        setActiveActor(next.id);
-    });
-
-    document.getElementById('clearActorBtn').addEventListener('click', () => {
         const actor = getActiveActor();
         if (!actor) return;
-        actor.waypoints = [];
-        resetOrientationState();
-        renderWaypointTable();
-        updatePlot();
-        renderXmlOutputs();
+        removeActorById(actor.id);
     });
+
+    if (clearActorBtn) {
+        clearActorBtn.addEventListener('click', () => {
+            const actor = getActiveActor();
+            if (!actor) return;
+            actor.waypoints = [];
+            resetActorOffsetState(actor);
+            resetOrientationState();
+            renderWaypointTable();
+            updatePlot();
+            renderXmlOutputs();
+        });
+    }
 
     document.getElementById('resetAllBtn').addEventListener('click', () => {
         if (!confirm('Clear all agents and waypoints?')) return;
