@@ -7,7 +7,7 @@ import carla
 import numpy as np
 from PIL import Image
 import yaml
-from typing import OrderedDict
+from typing import OrderedDict, Optional, List
 
 from codriving import CODRIVING_REGISTRY
 from codriving.models.model_decoration import decorate_model
@@ -91,6 +91,8 @@ class PnP_Agent(autonomous_agent.AutonomousAgent):
         self.config = yaml.load(open(path_to_conf_file),Loader=yaml.Loader)
         self.use_semantic = self.config['perception'].get('use_semantic', False)
         print('if use semantic?', self.use_semantic)
+        control_cfg = self.config.get('control', {})
+        self.force_global_route = control_cfg.get('force_global_route', True)
 
         import importlib
         module_name = self.config['action_name']
@@ -132,6 +134,7 @@ class PnP_Agent(autonomous_agent.AutonomousAgent):
         self.perception_model.eval()
 
         # load planning model
+        self.waypoints_num = self.config.get("planning", {}).get("waypoints_num", 20)
         planner_config = load_config_from_yaml(self.config['planning']['planner_config'])
         planning_model_config = planner_config['model']
         print('Creating planning Model')
@@ -356,6 +359,7 @@ class PnP_Agent(autonomous_agent.AutonomousAgent):
         local_command_point = R.T.dot(local_command_point)
         local_command_point = np.clip(local_command_point, a_min=[-self.config['perception']['detection_range'][1], -self.config['perception']['detection_range'][0]],
                                                                      a_max=[self.config['perception']['detection_range'][2], self.config['perception']['detection_range'][3]])
+        route_local = self._project_route_to_local(vehicle_num, pos, compass)
 
         # record measurements
         mes = {
@@ -380,7 +384,8 @@ class PnP_Agent(autonomous_agent.AutonomousAgent):
             "speed": speed,
             "compass": compass,
             "command": next_cmd.value,
-            "target_point": local_command_point
+            "target_point": local_command_point,
+            "route_local": route_local,
         }
 
         # return pre-loaded sensor data
@@ -395,6 +400,27 @@ class PnP_Agent(autonomous_agent.AutonomousAgent):
             "drivable_area": drivable_area
         }
         return result
+
+    def _project_route_to_local(self, vehicle_num: int, pos: np.ndarray, compass: float) -> Optional[List[List[float]]]:
+        if not hasattr(self, "_route_planner"):
+            return None
+        future = self._route_planner.get_future_waypoints(vehicle_num, num=self.config['planning']['waypoints_num'] + 5)
+        if not future:
+            return None
+        theta = compass + np.pi / 2.0
+        rot = np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
+        local_points: list[list[float]] = []
+        for waypoint in future:
+            wp = np.array(waypoint[:2], dtype=float)
+            local = rot.T.dot(wp - pos)
+            local_points.append(local.tolist())
+        if not local_points:
+            return None
+        if len(local_points) < self.waypoints_num:
+            local_points.extend([local_points[-1]] * (self.waypoints_num - len(local_points)))
+        else:
+            local_points = local_points[: self.waypoints_num]
+        return local_points
 
     def spawn_rsu(self):
         """

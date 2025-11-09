@@ -860,6 +860,9 @@ class PnP_infer():
 		self.perception_memory_bank = [[{}] for _ in range(self.ego_vehicles_num)]
 
 		self.controller = [V2X_Controller(self.config['control']) for _ in range(self.ego_vehicles_num)]
+		self.force_global_route = self.config['control'].get('force_global_route', True)
+		self.goal_complete_radius = self.config['control'].get('goal_stop_radius', 4.0)
+		self.route_completed = [False for _ in range(self.ego_vehicles_num)]
 
 		self.input_lidar_size = 224
 		self.lidar_range = [36, 36, 36, 36]
@@ -1198,7 +1201,17 @@ class PnP_infer():
 		## start ego inference
 		for ego_id in range(self.ego_vehicles_num):
 			if total_car_data_raw[ego_id][0] is not None:
+				measurements_now = total_car_data_raw[ego_id][0]['measurements']
+				if self._near_route_goal(measurements_now):
+					self.route_completed[ego_id] = True
 				# check negotiation duration
+				if self.route_completed[ego_id]:
+					control = carla.VehicleControl()
+					control.brake = 1.0
+					control.throttle = 0.0
+					control.steer = 0.0
+					control_all.append(control)
+					continue
 				if step < self.nego_dur_bank[ego_id]:
 					comm_info = self.comm_bank[ego_id]
 					# print('ego inference time: ', step*0.05, "round_comm_complete_time: ", self.round_comm_complete_time[ego_id], "round_comm_bank: ", self.round_comm_bank[ego_id])
@@ -1453,7 +1466,8 @@ class PnP_infer():
 						break
 			# Fallback: ensure we request acceleration when standing still.
 			if (float(measurements["speed"]) < 0.5 and
-					(self.speed_inten_veh[ego_id] in (None, "KEEP", "STOP") or self.cmd_speed.sum().item() == 0)):
+					(self.speed_inten_veh[ego_id] in (None, "KEEP", "STOP") or self.cmd_speed.sum().item() == 0)
+					and not self._near_route_goal(measurements)):
 				idx_faster = self.speed_inten_list.index("FASTER")
 				self.cmd_speed.zero_()
 				self.cmd_speed[self.judge_speed(idx_faster)] = 1
@@ -1467,6 +1481,10 @@ class PnP_infer():
 
 		predicted_waypoints = self.planning_model(planning_input) # [1, 10, 2]
 		predicted_waypoints = predicted_waypoints['future_waypoints']
+		route_local = measurements.get('route_local')
+		if self.force_global_route and route_local:
+			route_tensor = torch.tensor(route_local, dtype=predicted_waypoints.dtype, device=predicted_waypoints.device).unsqueeze(0)
+			predicted_waypoints = route_tensor
 		# predicted_waypoints: N, T_f=10, 2
 		# transform waypoints for negotiation
 		x_world = measurements['x']
@@ -1760,6 +1778,17 @@ class PnP_infer():
 			with open(folder_path / ("%04d.json" % frame), 'w') as f:
 				json.dump(results_to_write, f, indent=4)
 		return
+
+	def _near_route_goal(self, measurements):
+		route_local = measurements.get('route_local')
+		if route_local is None or len(route_local) == 0:
+			return False
+		try:
+			last = np.array(route_local[-1], dtype=float)
+		except Exception:
+			return False
+		return np.linalg.norm(last) <= self.goal_complete_radius
+
 
 
 	def generate_last_info(self, measurements_last):
