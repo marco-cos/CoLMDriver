@@ -760,7 +760,6 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
         {id: 'constructioncone', label: 'Construction cone', blueprint: 'static.prop.constructioncone', length: 0.45, width: 0.45},
         {id: 'trafficcone01', label: 'Traffic cone 01', blueprint: 'static.prop.trafficcone01', length: 0.4, width: 0.4},
         {id: 'trafficcone02', label: 'Traffic cone 02', blueprint: 'static.prop.trafficcone02', length: 0.4, width: 0.4},
-        {id: 'warningconstruction', label: 'Warning construction', blueprint: 'static.prop.warningconstruction', length: 1.0, width: 0.5},
         {id: 'trafficwarning', label: 'Traffic warning', blueprint: 'static.prop.trafficwarning', length: 1.2, width: 0.5},
         {id: 'warningaccident', label: 'Warning accident', blueprint: 'static.prop.warningaccident', length: 1.0, width: 0.5}
     ];
