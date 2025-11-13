@@ -1050,7 +1050,8 @@ class RouteScenario(BasicScenario):
                 ),
             )
 
-            if world_map is not None:
+            should_snap_to_road = role != "static"  # keep static props at their authored pose
+            if world_map is not None and should_snap_to_road:
                 snapped_wp = world_map.get_waypoint(
                     spawn_tf.location,
                     project_to_road=True,
