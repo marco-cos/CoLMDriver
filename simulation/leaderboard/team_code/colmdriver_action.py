@@ -1464,15 +1464,6 @@ class PnP_infer():
 						self.cmd_speed[cmd_index] = 1
 						self.speed_inten_veh[ego_id] = speed_inten
 						break
-			# Fallback: ensure we request acceleration when standing still.
-			if (float(measurements["speed"]) < 0.5 and
-					(self.speed_inten_veh[ego_id] in (None, "KEEP", "STOP") or self.cmd_speed.sum().item() == 0)
-					and not self._near_route_goal(measurements)):
-				idx_faster = self.speed_inten_list.index("FASTER")
-				self.cmd_speed.zero_()
-				self.cmd_speed[self.judge_speed(idx_faster)] = 1
-				self.speed_inten_veh[ego_id] = "FASTER"
-				print("[INFO] Applying fallback speed command: FASTER (current speed {:.2f} m/s)".format(float(measurements["speed"])))
 		except Exception as e:
 			print('vlm inference failed because ', e)
 
