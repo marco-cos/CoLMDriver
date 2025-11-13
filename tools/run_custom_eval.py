@@ -379,7 +379,7 @@ def main() -> None:
     env_template["LEADERBOARD_ROOT"] = str(leaderboard_root)
     env_template["SCENARIO_RUNNER_ROOT"] = str(scenario_runner_root)
     env_template["DATA_ROOT"] = str(data_root)
-    env_template.setdefault("COLMDRIVER_OFFLINE", "1")
+    env_template.setdefault("COLMDRIVER_OFFLINE", "0")
 
     append_pythonpath(env_template, scenario_runner_root)
     append_pythonpath(env_template, leaderboard_root)
