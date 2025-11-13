@@ -517,6 +517,9 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
         .static-model-header h3 {
             margin: 0;
         }
+        .static-model-controls {
+            margin-bottom: 12px;
+        }
         .static-model-hint {
             font-size: 12px;
             color: #8cb4ff;
@@ -666,6 +669,10 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
                         <button id="clearStaticModelsBtn" class="secondary">Clear models</button>
                     </div>
                 </div>
+                <div class="static-model-controls">
+                    <label for="staticModelPreset">Model preset</label>
+                    <select id="staticModelPreset"></select>
+                </div>
                 <p id="staticModelHint" class="static-model-hint hidden">
                     Click on the map to place the selected model. Use the table to fine-tune position and rotation.
                 </p>
@@ -747,11 +754,25 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
     const OVERLAY_MIN_SCALE = 0.1;
     const OVERLAY_MAX_SCALE = 3.0;
     const OVERLAY_SCALE_STEP = 0.1;
-    const STATIC_MODEL_PRESET = {
+    const STATIC_MODEL_PRESETS = [
+        {id: 'truck', label: 'Truck', blueprint: 'vehicle.carlamotors.carlacola', length: 12.0, width: 3.0},
+        {id: 'streetbarrier', label: 'Street barrier', blueprint: 'static.prop.streetbarrier', length: 2.0, width: 0.45},
+        {id: 'constructioncone', label: 'Construction cone', blueprint: 'static.prop.constructioncone', length: 0.45, width: 0.45},
+        {id: 'trafficcone01', label: 'Traffic cone 01', blueprint: 'static.prop.trafficcone01', length: 0.4, width: 0.4},
+        {id: 'trafficcone02', label: 'Traffic cone 02', blueprint: 'static.prop.trafficcone02', length: 0.4, width: 0.4},
+        {id: 'trafficwarning', label: 'Traffic warning', blueprint: 'static.prop.trafficwarning', length: 1.2, width: 0.5},
+        {id: 'warningaccident', label: 'Warning accident', blueprint: 'static.prop.warningaccident', length: 1.0, width: 0.5}
+    ];
+    const STATIC_MODEL_PRESET_MAP = {};
+    STATIC_MODEL_PRESETS.forEach(preset => {
+        STATIC_MODEL_PRESET_MAP[preset.id] = preset;
+    });
+    const STATIC_MODEL_DEFAULT_PRESET = STATIC_MODEL_PRESETS[0] || {
+        id: 'default',
+        label: 'Generic static',
+        blueprint: 'vehicle.carlamotors.carlacola',
         length: 12.0,
-        width: 3.0,
-        label: 'Truck',
-        blueprint: 'vehicle.carlamotors.carlacola'
+        width: 3.0
     };
     const PLOTLY_CLICK_FLAG = '__scenarioBuilderPlotlyClick';
 
@@ -780,6 +801,8 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
     let staticModels = [];
     let staticModelIdCounter = 0;
     let modelPlacementMode = false;
+    let activeStaticModelPresetId = STATIC_MODEL_DEFAULT_PRESET.id;
+    let staticModelCounters = {};
 
     function nextActorName(kind) {
         if (kind === 'ego') {
@@ -1001,6 +1024,42 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
         updateOverlayZoomUI();
     }
 
+    function getStaticModelPresetById(id) {
+        if (!id) return null;
+        return STATIC_MODEL_PRESET_MAP[id] || null;
+    }
+
+    function getActiveStaticModelPreset() {
+        return getStaticModelPresetById(activeStaticModelPresetId) || STATIC_MODEL_DEFAULT_PRESET;
+    }
+
+    function nextStaticModelName(preset) {
+        const key = preset.id || preset.label || 'static';
+        staticModelCounters[key] = (staticModelCounters[key] || 0) + 1;
+        return preset.label + ' ' + staticModelCounters[key];
+    }
+
+    function resetStaticModelCounters() {
+        staticModelCounters = {};
+    }
+
+    function updateStaticModelPlacementUi() {
+        const preset = getActiveStaticModelPreset();
+        const presetLabel = preset ? preset.label : null;
+        const suffix = presetLabel ? ' (' + presetLabel + ')' : '';
+        if (placeStaticModelBtn) {
+            const base = modelPlacementMode ? 'Click map…' : 'Place 3D model';
+            placeStaticModelBtn.textContent = base + suffix;
+        }
+        if (staticModelHint) {
+            staticModelHint.classList.toggle('hidden', !modelPlacementMode);
+            const hintText = 'Click on the map to place the selected model' +
+                (presetLabel ? ' (' + presetLabel + ')' : '') +
+                '. Use the table to fine-tune position and rotation.';
+            staticModelHint.textContent = hintText;
+        }
+    }
+
     function setModelPlacementMode(enabled) {
         modelPlacementMode = enabled;
         if (modelPlacementMode) {
@@ -1008,23 +1067,22 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
         }
         if (placeStaticModelBtn) {
             placeStaticModelBtn.classList.toggle('model-placement-active', enabled);
-            placeStaticModelBtn.textContent = enabled ? 'Click map…' : 'Place 3D model';
         }
-        if (staticModelHint) {
-            staticModelHint.classList.toggle('hidden', !enabled);
-        }
+        updateStaticModelPlacementUi();
     }
 
-    function createStaticModel(x, y) {
+    function createStaticModel(x, y, presetId) {
+        const preset = getStaticModelPresetById(presetId) || getActiveStaticModelPreset();
+        if (!preset) return;
         const model = {
             id: staticModelIdCounter,
-            name: STATIC_MODEL_PRESET.label + ' ' + String(staticModelIdCounter + 1),
+            name: nextStaticModelName(preset),
             x,
             y,
             yaw: 0,
-            length: STATIC_MODEL_PRESET.length,
-            width: STATIC_MODEL_PRESET.width,
-            blueprint: STATIC_MODEL_PRESET.blueprint
+            length: (Number.isFinite(preset.length) ? preset.length : STATIC_MODEL_DEFAULT_PRESET.length),
+            width: (Number.isFinite(preset.width) ? preset.width : STATIC_MODEL_DEFAULT_PRESET.width),
+            blueprint: preset.blueprint || STATIC_MODEL_DEFAULT_PRESET.blueprint
         };
         staticModelIdCounter += 1;
         staticModels.push(model);
@@ -1044,6 +1102,7 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
     function clearStaticModels() {
         staticModels = [];
         staticModelIdCounter = 0;
+        resetStaticModelCounters();
         renderStaticModelTable();
         updatePlot();
     }
@@ -1149,6 +1208,7 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
     const openBevBtn = document.getElementById('openBevFullscreen');
     const staticModelHint = document.getElementById('staticModelHint');
     const staticModelTableBody = document.getElementById('staticModelTableBody');
+    const staticModelPresetSelect = document.getElementById('staticModelPreset');
     const placeStaticModelBtn = document.getElementById('placeStaticModelBtn');
     const clearStaticModelsBtn = document.getElementById('clearStaticModelsBtn');
     const bevOverlay = document.getElementById('bevOverlay');
@@ -1164,6 +1224,25 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
     const offsetYInput = document.getElementById('offsetYInput');
     const applyOffsetBtn = document.getElementById('applyOffsetBtn');
     const resetOffsetBtn = document.getElementById('resetOffsetInputs');
+
+    if (staticModelPresetSelect) {
+        staticModelPresetSelect.innerHTML = '';
+        STATIC_MODEL_PRESETS.forEach(preset => {
+            const option = document.createElement('option');
+            option.value = preset.id;
+            option.textContent = preset.label;
+            staticModelPresetSelect.appendChild(option);
+        });
+        if (activeStaticModelPresetId && STATIC_MODEL_PRESET_MAP[activeStaticModelPresetId]) {
+            staticModelPresetSelect.value = activeStaticModelPresetId;
+        }
+        staticModelPresetSelect.addEventListener('change', () => {
+            const nextPreset = getStaticModelPresetById(staticModelPresetSelect.value);
+            if (!nextPreset) return;
+            activeStaticModelPresetId = nextPreset.id;
+            updateStaticModelPlacementUi();
+        });
+    }
     const baseTrace = {
         x: [],
         y: [],
@@ -1407,7 +1486,7 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
         const pt = data.points[0];
         if (typeof pt.x !== 'number' || typeof pt.y !== 'number') return;
         if (modelPlacementMode) {
-            createStaticModel(pt.x, pt.y);
+            createStaticModel(pt.x, pt.y, activeStaticModelPresetId);
             setModelPlacementMode(false);
             return;
         }
@@ -1744,7 +1823,9 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
 
     function generateStaticModelXml(model) {
         const routeId = document.getElementById('routeId').value || '0';
-        const blueprint = model.blueprint || STATIC_MODEL_PRESET.blueprint || 'vehicle.carlamotors.carlacola';
+        const blueprint = model.blueprint ||
+            (STATIC_MODEL_DEFAULT_PRESET ? STATIC_MODEL_DEFAULT_PRESET.blueprint : null) ||
+            'vehicle.carlamotors.carlacola';
         const lines = [
             "<?xml version='1.0' encoding='utf-8'?>",
             '<routes>',
@@ -1897,6 +1978,7 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
         updateBevPreview(data, name);
         staticModels = [];
         staticModelIdCounter = 0;
+        resetStaticModelCounters();
         renderStaticModelTable();
         setModelPlacementMode(false);
         baseTrace.x = data.x;
@@ -2017,6 +2099,7 @@ def generate_html(town_payloads: dict[str, dict[str, Any]],
         activeActorId = actor.id;
         staticModels = [];
         staticModelIdCounter = 0;
+        resetStaticModelCounters();
         renderStaticModelTable();
         setModelPlacementMode(false);
         resetOrientationState();
