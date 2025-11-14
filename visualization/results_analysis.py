@@ -33,7 +33,8 @@ ROUTE_PREFIXES = {
     "Interdrive_no_npc_": "No NPC",
     "Interdrive_npc_": "NPC",
 }
-MODE_ORDER = {"No NPC": 0, "NPC": 1}
+DEFAULT_MODE_LABEL = "Custom"
+MODE_ORDER = {"No NPC": 0, "NPC": 1, DEFAULT_MODE_LABEL: 2}
 
 BASE_TYPE_LABELS: Dict[str, str] = {
     "hw": "Highway",
@@ -87,6 +88,13 @@ def parse_route_agent_map(spec: str) -> Dict[str, int]:
 
 
 ROUTE_AGENT_MAP = parse_route_agent_map(_ROUTE_AGENT_SPEC)
+
+
+def detect_mode_label(name: str) -> Tuple[str, str]:
+    for prefix, mode in ROUTE_PREFIXES.items():
+        if name.startswith(prefix):
+            return mode, prefix
+    return DEFAULT_MODE_LABEL, ""
 
 
 # ---------------------------------------------------------------------------
@@ -755,7 +763,7 @@ def load_negotiation_logs(base_path: str):
                 continue
 
             selected_source = run_logs[-1][1]
-            mode_label = "No NPC" if scenario_name.startswith("Interdrive_no_npc_") else "NPC"
+            mode_label, _ = detect_mode_label(scenario_name)
             log_sources.append(
                 NegotiationLogSource(
                     scenario_name=scenario_name,
@@ -822,7 +830,7 @@ def load_negotiation_logs(base_path: str):
                         {
                             "scenario": scenario_name,
                             "route_id": meta.route_id,
-                            "mode": "No NPC" if scenario_name.startswith("Interdrive_no_npc_") else "NPC",
+                            "mode": mode_label,
                             "run_id": run_id,
                             "stage": stage_key,
                             "event": event_key,
@@ -865,12 +873,12 @@ def load_negotiation_logs(base_path: str):
 
 def analyze_results(main_path: str):
     discovered_routes = []
-    for route_dir in os.listdir(main_path):
-        for prefix, mode in ROUTE_PREFIXES.items():
-            if route_dir.startswith(prefix):
-                discovered_routes.append((mode, prefix, route_dir))
-                break
-
+    for route_dir in sorted(os.listdir(main_path)):
+        route_path = os.path.join(main_path, route_dir)
+        if not os.path.isdir(route_path):
+            continue
+        mode, prefix = detect_mode_label(route_dir)
+        discovered_routes.append((mode, prefix, route_dir))
     if not discovered_routes:
         return None
 
@@ -1467,7 +1475,7 @@ def generate_score_distribution(figures_dir: Path, route_entries: List[Dict], ex
 
     available_modes = [mode for mode in ("No NPC", "NPC") if data.get(mode)]
     if not available_modes:
-        available_modes = list(data.keys())
+        available_modes = sorted(data.keys(), key=lambda label: MODE_ORDER.get(label, len(MODE_ORDER)))
     if not available_modes:
         return None
 
@@ -1558,19 +1566,23 @@ def generate_negotiation_rounds_chart(figures_dir: Path, route_entries: List[Dic
 
 
 def generate_agent_count_distribution(figures_dir: Path, route_entries: List[Dict], experiment_dir: Path):
-    counts = defaultdict(lambda: {"No NPC": 0, "NPC": 0})
+    counts = defaultdict(lambda: defaultdict(int))
+    modes_present = set()
     for entry in route_entries:
         agent_count = entry.get("agent_count", 0)
-        mode = entry.get("mode", "")
+        mode = entry.get("mode") or DEFAULT_MODE_LABEL
         counts[agent_count][mode] += 1
+        modes_present.add(mode)
 
     if not counts:
         return None
 
     sorted_counts = sorted(counts.keys())
-    modes = ["No NPC", "NPC"]
+    if not modes_present:
+        modes_present.add(DEFAULT_MODE_LABEL)
+    modes = sorted(modes_present, key=lambda label: MODE_ORDER.get(label, len(MODE_ORDER)))
     x = np.arange(len(sorted_counts))
-    width = 0.35
+    width = 0.8 / max(len(modes), 1)
 
     fig, ax = plt.subplots(figsize=(8, 5))
     for idx, mode in enumerate(modes):
