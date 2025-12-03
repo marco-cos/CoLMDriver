@@ -1,5 +1,7 @@
 # Python-gitignore: https://github.com/github/gitignore/blob/main/Python.gitignore
 
+Bench2DriveZoo/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

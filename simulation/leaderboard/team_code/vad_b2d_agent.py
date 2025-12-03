@@ -510,7 +510,7 @@ class VadAgent(autonomous_agent.AutonomousAgent):
         self.next_action_step[ego_id] = self.step + int((end_time - start_time) * 20)
         print(self.next_action_step[ego_id])
 
-        if SAVE_PATH is not None and self.step % 10 == 0:
+        if SAVE_PATH is not None and self.step % 5 == 0:
             self.save(ego_id, tick_data)
         self.prev_control[ego_id] = control
         
