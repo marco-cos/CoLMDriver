@@ -19,6 +19,7 @@ from Bench2DriveZoo.team_code.pid_controller import PIDController
 from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 from Bench2DriveZoo.team_code.planner import RoutePlanner
 from leaderboard.autoagents import autonomous_agent
+from leaderboard.utils.route_manipulation import _get_latlon_ref
 from mmcv import Config
 from mmcv.models import build_model
 from mmcv.utils import load_checkpoint
@@ -42,7 +43,8 @@ class VadAgent(autonomous_agent.AutonomousAgent):
         self.last_moving_status = 0
         self.last_moving_step = -1
         self.last_steer = 0
-        self.pidcontroller = PIDController() 
+        # Per-ego PID controllers to avoid cross-vehicle state sharing
+        self.pidcontrollers = [PIDController() for _ in range(ego_vehicles_num)]
         self.ego_vehicles_num=ego_vehicles_num
         self.config_path = 'simulation/assets/VAD/VAD_base_e2e_b2d.py'
         now=datetime.datetime.now()
@@ -85,14 +87,21 @@ class VadAgent(autonomous_agent.AutonomousAgent):
         self.takeover_time = 0
         self.save_path = None
         self._im_transform = T.Compose([T.ToTensor(), T.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225])])
+        # Debug logging controls; set DRIVE_DEBUG=0 to disable or DRIVE_DEBUG_EVERY to change frequency
+        self.debug_log = os.environ.get("DRIVE_DEBUG", "1") != "0"
+        self.log_every = int(os.environ.get("DRIVE_DEBUG_EVERY", "1"))
         self.lat_ref, self.lon_ref = 42.0, 2.0
 
-        control = carla.VehicleControl()
-        control.steer = 0.0
-        control.throttle = 0.0
-        control.brake = 0.0	
-        self.prev_control = [control] * ego_vehicles_num
-        self.prev_control_cache = [[]] * ego_vehicles_num
+        # Independent previous-control state per ego to avoid aliasing
+        base_control = carla.VehicleControl()
+        base_control.steer = 0.0
+        base_control.throttle = 0.0
+        base_control.brake = 0.0	
+        self.prev_control = [carla.VehicleControl(steer=base_control.steer,
+                                                 throttle=base_control.throttle,
+                                                 brake=base_control.brake)
+                             for _ in range(ego_vehicles_num)]
+        self.prev_control_cache = [[] for _ in range(ego_vehicles_num)]
         if SAVE_PATH is not None:
             now = datetime.datetime.now()
             string = pathlib.Path(os.environ['ROUTES']).stem + '_'
@@ -229,25 +238,30 @@ class VadAgent(autonomous_agent.AutonomousAgent):
         self.coor2topdown = topdown_intrinsics @ self.coor2topdown
 
     def _init(self):
+        # Inspect route inputs to understand shapes/types
+        if self.debug_log:
+            try:
+                gpwc0 = self._global_plan_world_coord[0][0]
+                gpgps0 = self._global_plan[0][0]
+                self._log(f"[INIT_DEBUG] _global_plan_world_coord[0][0] type={type(gpwc0)} content={gpwc0}")
+                self._log(f"[INIT_DEBUG] _global_plan[0][0] type={type(gpgps0)} content={gpgps0}")
+            except Exception as e:
+                self._log(f"[INIT_DEBUG] failed to inspect plan entries: {e}")
         try:
-            locx, locy = self._global_plan_world_coord[0][0].location.x, self._global_plan_world_coord[0][0].location.y
-            lon, lat = self._global_plan[0][0]['lon'], self._global_plan[0][0]['lat']
-            EARTH_RADIUS_EQUA = 6378137.0
-            def equations(vars):
-                x, y = vars
-                eq1 = lon * math.cos(x * math.pi / 180) - (locx * x * 180) / (math.pi * EARTH_RADIUS_EQUA) - math.cos(x * math.pi / 180) * y
-                eq2 = math.log(math.tan((lat + 90) * math.pi / 360)) * EARTH_RADIUS_EQUA * math.cos(x * math.pi / 180) + locy - math.cos(x * math.pi / 180) * EARTH_RADIUS_EQUA * math.log(math.tan((90 + x) * math.pi / 360))
-                return [eq1, eq2]
-            initial_guess = [0, 0]
-            solution = fsolve(equations, initial_guess)
-            self.lat_ref, self.lon_ref = solution[0], solution[1]
+            # Prefer the map's geo-reference to avoid tuple/format issues
+            self.lat_ref, self.lon_ref = _get_latlon_ref(CarlaDataProvider.get_world())
         except Exception as e:
             print(e, flush=True)
+            self._log(f"[INIT_ERROR] Failed to get lat/lon ref: {e}")
             self.lat_ref, self.lon_ref = 0, 0      
-        self._route_planner = RoutePlanner(4.0, 50.0, lat_ref=self.lat_ref, lon_ref=self.lon_ref)
-        self._route_planner.set_route(self._global_plan, True)
-        self.next_action_step = [-1] * 10
+        self._route_planners = []
+        for ego_id in range(self.ego_vehicles_num):
+            route_planner = RoutePlanner(4.0, 50.0, lat_ref=self.lat_ref, lon_ref=self.lon_ref)
+            route_planner.set_route(self._global_plan[ego_id], True, self._global_plan_world_coord[ego_id])
+            self._route_planners.append(route_planner)
+        self.next_action_step = [-1] * self.ego_vehicles_num
         self.initialized = True
+        self._log(f"[INIT] lat_ref={self.lat_ref:.6f}, lon_ref={self.lon_ref:.6f}, route_len={len(self._global_plan[0]) if self._global_plan else 0}")
   
   
 
@@ -348,7 +362,29 @@ class VadAgent(autonomous_agent.AutonomousAgent):
         angular_velocity = input_data[f'IMU_{ego_id}'][1][3:6]
   
         pos = self.gps_to_location(gps)
-        near_node, near_command = self._route_planner.run_step(pos)
+        route_out = self._route_planners[ego_id].run_step(pos)
+        # Allow for (pos, cmd, pos_world) tuples
+        near_node, near_command = route_out[0], route_out[1]
+        near_world = route_out[2] if len(route_out) > 2 else None
+
+        if self.debug_log and (self.step % self.log_every == 0):
+            ego_actor = CarlaDataProvider.get_hero_actor(hero_id=ego_id)
+            ego_tf = ego_actor.get_transform() if ego_actor else None
+            ego_loc = ego_tf.location if ego_tf else None
+            ego_yaw = ego_tf.rotation.yaw if ego_tf else None
+            world_target = (near_world.location.x, near_world.location.y) if near_world else None
+            ego_x = getattr(ego_loc, "x", None)
+            ego_y = getattr(ego_loc, "y", None)
+            self._log(
+                f"[TICK_WORLD][ego={ego_id}] gps_latlon={gps.tolist()} pos_local={pos.tolist()} "
+                f"lat_ref={self.lat_ref:.6f} lon_ref={self.lon_ref:.6f} "
+                f"ego_world=({ego_x},{ego_y}, yaw={ego_yaw}) "
+                f"near_node_local=({float(near_node[0]):.3f},{float(near_node[1]):.3f}) "
+                f"near_node_world={world_target}"
+            )
+        if self.debug_log and (self.step % self.log_every == 0):
+            self._log(f"[TICK][ego={ego_id}] gps={gps.tolist()} pos={pos.tolist()} lat_ref={self.lat_ref:.6f} lon_ref={self.lon_ref:.6f} "
+                      f"speed={speed:.3f} compass={compass:.3f} near_node={(float(near_node[0]), float(near_node[1]))} near_cmd={near_command}")
   
         if (math.isnan(compass) == True): #It can happen that the compass sends nan for a few frames
             compass = 0.0
@@ -485,7 +521,8 @@ class VadAgent(autonomous_agent.AutonomousAgent):
         all_out_truck_d1 = output_data_batch[0]['pts_bbox']['ego_fut_preds'].cpu().numpy()
         all_out_truck =  np.cumsum(all_out_truck_d1,axis=1)
         out_truck = all_out_truck[command]
-        steer_traj, throttle_traj, brake_traj, metadata_traj = self.pidcontroller.control_pid(out_truck, tick_data['speed'], local_command_xy)
+        controller = self.pidcontrollers[ego_id]
+        steer_traj, throttle_traj, brake_traj, metadata_traj = controller.control_pid(out_truck, tick_data['speed'], local_command_xy)
         if brake_traj < 0.05: brake_traj = 0.0
         if throttle_traj > brake_traj: brake_traj = 0.0
         end_time = time.time()
@@ -506,6 +543,12 @@ class VadAgent(autonomous_agent.AutonomousAgent):
         self.pid_metadata['plan'] = out_truck.tolist()
         self.pid_metadata['command'] = command
         self.pid_metadata['all_plan'] = all_out_truck.tolist()
+        if self.debug_log and (self.step % self.log_every == 0):
+            self._log(f"[CTRL][ego={ego_id}] can_pos=({can_bus[0]:.2f},{can_bus[1]:.2f}) "
+                      f"theta={ego_theta:.3f} speed={tick_data['speed']:.3f} "
+                      f"target_local=({local_command_xy[0]:.2f},{local_command_xy[1]:.2f}) "
+                      f"wp0=({out_truck[0][0]:.2f},{out_truck[0][1]:.2f}) steer={control.steer:.3f} "
+                      f"throttle={control.throttle:.3f} brake={control.brake:.3f}")
 
         self.next_action_step[ego_id] = self.step + int((end_time - start_time) * 20)
         print(self.next_action_step[ego_id])
@@ -513,7 +556,6 @@ class VadAgent(autonomous_agent.AutonomousAgent):
         if SAVE_PATH is not None and self.step % 5 == 0:
             self.save(ego_id, tick_data)
         self.prev_control[ego_id] = control
-        
         if len(self.prev_control_cache[ego_id])==10:
             self.prev_control_cache[ego_id].pop(0)
         self.prev_control_cache[ego_id].append(control)
@@ -549,3 +591,7 @@ class VadAgent(autonomous_agent.AutonomousAgent):
         y = scale * EARTH_RADIUS_EQUA * math.log(math.tan((90.0 + self.lat_ref) * math.pi / 360.0)) - my
         x = mx - scale * self.lon_ref * math.pi * EARTH_RADIUS_EQUA / 180.0
         return np.array([x, y])
+
+    def _log(self, msg):
+        """Lightweight debug logger."""
+        print(msg, flush=True)
