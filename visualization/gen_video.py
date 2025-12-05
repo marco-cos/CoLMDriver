@@ -16,7 +16,8 @@ ANSI_ESCAPE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 STEP_TIME_PATTERN = re.compile(r"step infer time:\s*([0-9.]+)")
 FRAME_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 LABEL_PADDING = 14
-VEHICLE_DIR_PATTERN = re.compile(r"ego_vehicle_(\d+)$")
+VEHICLE_DIR_PATTERN = re.compile(r"^(?:ego_vehicle|rgb_front)_(\d+)$")
+ALLOWED_STREAM_PREFIXES = ("ego_vehicle_", "rgb_front_")
 
 
 @dataclass
@@ -42,10 +43,13 @@ def list_vehicle_streams(root: Path) -> List[VehicleStream]:
     for entry in root.iterdir():
         if not entry.is_dir():
             continue
-        match = re.search(r"(\d+)$", entry.name)
-        if not match:
+
+        m = VEHICLE_DIR_PATTERN.match(entry.name)
+        if not m:
             continue
-        index = int(match.group(1))
+
+        index = int(m.group(1))   # the (\d+) capture
+
         image_paths = sorted(
             (entry / fname for fname in os.listdir(entry)),
             key=lambda p: p.stem,
@@ -53,6 +57,7 @@ def list_vehicle_streams(root: Path) -> List[VehicleStream]:
         image_paths = [p for p in image_paths if p.suffix.lower() in FRAME_EXTENSIONS]
         if not image_paths:
             continue
+
         streams.append(
             VehicleStream(index=index, label=f"Vehicle {index}", image_paths=image_paths)
         )
@@ -60,7 +65,7 @@ def list_vehicle_streams(root: Path) -> List[VehicleStream]:
     if not streams:
         raise FileNotFoundError(
             f"No vehicle folders with images were found in {root}. "
-            "Expected folders like ego_vehicle_0, ego_vehicle_1, etc."
+            "Expected folders like rgb_front_0, rgb_front_1 (or ego_vehicle_* if present)."
         )
 
     streams.sort(key=lambda s: s.index)
