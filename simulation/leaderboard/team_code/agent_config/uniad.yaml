@@ -5,8 +5,9 @@ agent:
   type: uniad
 
 model:
-  config_path: /data2/marco/CoLMDriver/uniad/configs/uniad_base_b2d.py
-  checkpoint_path: /data2/marco/CoLMDriver/ckpt/UniAD/uniad_base_b2d.pth
+  # Repo-relative paths to the shipped UniAD config and checkpoint
+  config_path: simulation/assets/UniAD/base_e2e_b2d.py
+  checkpoint_path: ckpt/UniAD/uniad_base_b2d.pth
 
 runtime:
   device: cuda
