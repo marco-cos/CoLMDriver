@@ -44,14 +44,15 @@ export DEBUG_CHALLENGE=0
 export REPETITIONS=1 # multiple evaluation runs
 export TEAM_AGENT=simulation/leaderboard/team_code/$4.py
 export TEAM_CONFIG=simulation/leaderboard/team_code/agent_config/$5.yaml
-if [ $5 == 'uniad' ];then {
+if [ "$5" == "uniad" ]; then
     echo uniad config
     export TEAM_CONFIG=simulation/assets/UniAD/base_e2e_b2d.py+ckpt/UniAD/uniad_base_b2d.pth
-}
-elif [[ $5 == 'lmdrive' ]];then {
+elif [[ "$5" == lmdriver_config_* ]]; then
     echo lmdrive config
     export TEAM_CONFIG=simulation/leaderboard/team_code/agent_config/$5.py
-}
+elif [ "$5" == "lmdrive" ]; then
+    echo lmdrive config
+    export TEAM_CONFIG=simulation/leaderboard/team_code/agent_config/$5.py
 fi
 
 if [ "$REALTIME_MODE" == "1" ]; then

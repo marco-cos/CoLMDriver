@@ -313,6 +313,52 @@ The downloaded checkpoints should follow this structure:
         |--TCP
             |--new.ckpt
 ```
+### LMDrive baseline
+
+1. **Clone LMDrive into the assets directory**
+```bash
+git clone https://github.com/opendilab/LMDrive simulation/assets/LMDrive
+```
+
+2. **Prepare LMDrive checkpoints**
+```bash
+cd simulation/assets/LMDrive
+mkdir -p ckpt
+```
+
+Download and place the following into `simulation/assets/LMDrive/ckpt`:
+- Vision encoder: https://huggingface.co/OpenDILabCommunity/LMDrive-vision-encoder-r50-v1.0  
+- LMDrive LLaVA weights: https://huggingface.co/OpenDILabCommunity/LMDrive-llava-v1.5-7b-v1.0  
+
+Download the base LLaVA model:
+https://huggingface.co/liuhaotian/llava-v1.5-7b  
+
+Place it at:
+```text
+CoLMDriver/ckpt/llava-v1.5-7b
+```
+
+3. **Create environment and install dependencies**
+```bash
+cd CoLMDriver
+conda env create -f model_envs/lmdrive.yaml -n lmdrive
+conda activate lmdrive
+
+pip install carla-birdeye-view==1.1.1 --no-deps
+pip install -e simulation/assets/LMDrive/vision_encoder
+```
+
+4. **Set CARLA paths**
+```bash
+export CARLA_ROOT=PATHTOYOURREPOROOT/CoLMDriver/external_paths/carla_root
+export PYTHONPATH=$CARLA_ROOT/PythonAPI:$CARLA_ROOT/PythonAPI/carla:$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.10-py3.7-linux-x86_64.egg
+```
+
+5. **Run LMDrive on Interdrive**
+```bash
+# CARLA must already be running on port 2000
+bash scripts/eval/eval_mode.sh 0 2000 lmdrive ideal Interdrive_all
+```
 
 Evaluate TCP, CoDriving on Interdrive benchmark:
 

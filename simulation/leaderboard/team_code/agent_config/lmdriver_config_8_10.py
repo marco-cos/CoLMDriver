@@ -22,8 +22,8 @@ class GlobalConfig:
 
     llm_model = 'ckpt/llava-v1.5-7b'
     preception_model = 'memfuser_baseline_e1d3_return_feature'
-    preception_model_ckpt = 'LMDrive/ckpt/vision-encoder-r50.pth.tar' #'sensor_pretrain.pth.tar.r50'
-    lmdrive_ckpt = 'LMDrive/ckpt/llava-v1.5-checkpoint.pth' #'lmdrive_llava.pth'
+    preception_model_ckpt = 'simulation/assets/LMDrive/ckpt/vision-encoder-r50.pth.tar' #'sensor_pretrain.pth.tar.r50'
+    lmdrive_ckpt = 'simulation/assets/LMDrive/ckpt/llava-v1.5-checkpoint.pth' #'lmdrive_llava.pth'
 
     agent_use_notice = False
     sample_rate = 2
