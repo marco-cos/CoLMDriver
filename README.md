@@ -313,7 +313,7 @@ The downloaded checkpoints should follow this structure:
         |--TCP
             |--new.ckpt
 ```
-### LMDrive baseline
+### LMDrive Environment Setup
 
 1. **Clone LMDrive into the assets directory**
 ```bash
@@ -330,13 +330,8 @@ Download and place the following into `simulation/assets/LMDrive/ckpt`:
 - Vision encoder: https://huggingface.co/OpenDILabCommunity/LMDrive-vision-encoder-r50-v1.0  
 - LMDrive LLaVA weights: https://huggingface.co/OpenDILabCommunity/LMDrive-llava-v1.5-7b-v1.0  
 
-Download the base LLaVA model:
-https://huggingface.co/liuhaotian/llava-v1.5-7b  
-
-Place it at:
-```text
-CoLMDriver/ckpt/llava-v1.5-7b
-```
+Download and place the following into `CoLMDriver/ckpt/llava-v1.5-7b`:
+- Base LLaVA model: https://huggingface.co/liuhaotian/llava-v1.5-7b  
 
 3. **Create environment and install dependencies**
 ```bash
@@ -348,7 +343,7 @@ pip install carla-birdeye-view==1.1.1 --no-deps
 pip install -e simulation/assets/LMDrive/vision_encoder
 ```
 
-4. **Set CARLA paths**
+4. **Set CARLA path environment variables**
 ```bash
 export CARLA_ROOT=PATHTOYOURREPOROOT/CoLMDriver/external_paths/carla_root
 export PYTHONPATH=$CARLA_ROOT/PythonAPI:$CARLA_ROOT/PythonAPI/carla:$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.10-py3.7-linux-x86_64.egg
