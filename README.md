@@ -451,6 +451,69 @@ Our training data is also provided in [google drive](https://drive.google.com/fi
 
 Using [ms-swift](https://github.com/modelscope/ms-swift) to finetune the MLLMs. Installation and details refer to the official repo. We provide an example script in [MLLMs/finetune.sh](https://github.com/cxliu0314/CoLMDriver/blob/main/MLLMs/finetune.sh)
 
+### UniAD Environment Setup
+
+UniAD is a unified perception–prediction–planning autonomous driving model.  
+We evaluate it on the InterDrive benchmark using its official pretrained weights and a standardized conda environment to avoid dependency conflicts.
+
+To ensure consistent and reproducible evaluation of the UniAD baseline model, we standardize the environment setup using a pre-built conda environment.
+This avoids dependency conflicts and ensures that anyone can run UniAD without rebuilding environments from scratch.
+
+
+The YAML file for the UniAD environment is located in:
+
+`model_envs/uniad_env.yaml`
+
+To create and activate the environment:
+
+```bash
+conda env create -f model_envs/uniad_env.yaml -n uniad_env
+conda activate uniad_env
+```
+
+UniAD runs inside the `uniad_env` conda environment, which contains all required CUDA, PyTorch, CARLA, and UniAD dependencies.
+
+#### Additional Files
+
+Create a ckpt/UniAD directory if it does not exist:
+`mkdir -p CoLMDriver/ckpt/UniAD`
+
+Download the UniAD checkpoint from https://huggingface.co/rethinklab/Bench2DriveZoo/blob/main/uniad_base_b2d.pth
+and place it here:
+
+`CoLMDriver/ckpt/UniAD/uniad_base_b2d.pth`
+
+Download the UniAD config file from https://github.com/Thinklab-SJTU/Bench2DriveZoo/blob/uniad/vad/adzoo/uniad/configs/stage2_e2e/base_e2e_b2d.py and place it in:
+
+`simulation/assets/UniAD/base_e2e_b2d.py`
+
+### Evaluating UniAD on the InterDrive Benchmark
+
+Once the UniAD environment is created and the required checkpoint and config file are placed in the correct directories, UniAD can be evaluated on the InterDrive benchmark using the standard evaluation script.
+
+#### **1. Activate the UniAD environment**
+```bash
+conda activate uniad_env
+```
+
+#### **2. Start a Carla Instance**
+```bash
+CUDA_VISIBLE_DEVICES=0 ./external_paths/carla_root/CarlaUE4.sh --world-port=2000 -prefer-nvidia
+```
+#### **3. Run UniAD on Interdrive**
+In a new terminal:
+```bash 
+conda activate uniad_env
+bash scripts/eval/eval_mode.sh 0 2000 uniad ideal Interdrive_all
+```
+#### **3. Evaluation and Analysis Generation**
+
+To run the evaluation and generate a report analysis, use the same commands as colmdriver, but change the model to uniad, for example:
+
+```bash 
+bash scripts/eval/eval_mode.sh 0 2000 uniad ideal Interdrive_all
+```
+
 
 ## Acknowledgements
 This implementation is based on code from several repositories.
