@@ -20,6 +20,8 @@ from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 from Bench2DriveZoo.team_code.planner import RoutePlanner
 from leaderboard.autoagents import autonomous_agent
 from leaderboard.utils.route_manipulation import _get_latlon_ref
+# Local helper for route debugging
+from route_debugger_runtime import RouteRuntimeDebugger
 from mmcv import Config
 from mmcv.models import build_model
 from mmcv.utils import load_checkpoint
@@ -27,9 +29,16 @@ from mmcv.datasets.pipelines import Compose
 from mmcv.parallel.collate import collate as  mm_collate_to_batch_form
 from mmcv.core.bbox import get_box_type
 from pyquaternion import Quaternion
+from pathlib import Path
 
 SAVE_PATH = os.environ.get('SAVE_PATH', None)
 IS_BENCH2DRIVE = os.environ.get('IS_BENCH2DRIVE', None)
+# Always enable route debugging; set VAD_ROUTE_DEBUG=0 to disable.
+ROUTE_DEBUG_FLAG = str(os.environ.get("VAD_ROUTE_DEBUG", "1")).lower() in ("1", "true", "yes")
+ROUTE_DEBUG_DIR = os.environ.get("VAD_ROUTE_DEBUG_DIR", "results/vad_route_debug")
+# Force route debugging on by default; override with VAD_ROUTE_DEBUG=0 if needed.
+ROUTE_DEBUG_FLAG = str(os.environ.get("VAD_ROUTE_DEBUG", "1")).lower() in ("1", "true", "yes")
+ROUTE_DEBUG_DIR = os.environ.get("VAD_ROUTE_DEBUG_DIR", "results/vad_route_debug")
 
 
 def get_entry_point():
@@ -117,6 +126,17 @@ class VadAgent(autonomous_agent.AutonomousAgent):
                 (self.save_path / f'rgb_back_left_{ego_id}').mkdir()
                 (self.save_path / f'meta_{ego_id}').mkdir()
                 #(self.save_path / f'bev_{ego_id}').mkdir()
+
+        self.route_debugger = None
+        if ROUTE_DEBUG_FLAG:
+            route_tag = pathlib.Path(os.environ.get("ROUTES", "custom_route")).stem
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            session_tag = f"{self.save_name}_{timestamp}"
+            self.route_debugger = RouteRuntimeDebugger(
+                base_dir=ROUTE_DEBUG_DIR,
+                route_tag=route_tag,
+                session_tag=session_tag,
+            )
 
         self.lidar2img = {
             f'CAM_FRONT_{i}': np.array([
@@ -254,11 +274,24 @@ class VadAgent(autonomous_agent.AutonomousAgent):
             print(e, flush=True)
             self._log(f"[INIT_ERROR] Failed to get lat/lon ref: {e}")
             self.lat_ref, self.lon_ref = 0, 0      
+        # Optionally refine the global plan to avoid snapping to unintended lanes
+        refined_plans = list(self._global_plan)
+        refined_worlds = list(self._global_plan_world_coord)
+
         self._route_planners = []
         for ego_id in range(self.ego_vehicles_num):
             route_planner = RoutePlanner(4.0, 50.0, lat_ref=self.lat_ref, lon_ref=self.lon_ref)
-            route_planner.set_route(self._global_plan[ego_id], True, self._global_plan_world_coord[ego_id])
+            route_planner.set_route(refined_plans[ego_id], True, refined_worlds[ego_id])
             self._route_planners.append(route_planner)
+        if self.route_debugger:
+            self.route_debugger.set_reference(self.lat_ref, self.lon_ref)
+            # Use ego 0 plan as representative; extend if you need per-ego files.
+            snapshot = list(self._route_planners[0].route)
+            self.route_debugger.capture_plan(
+                refined_plans[0],
+                refined_worlds[0],
+                snapshot,
+            )
         self.next_action_step = [-1] * self.ego_vehicles_num
         self.initialized = True
         self._log(f"[INIT] lat_ref={self.lat_ref:.6f}, lon_ref={self.lon_ref:.6f}, route_len={len(self._global_plan[0]) if self._global_plan else 0}")
@@ -344,7 +377,7 @@ class VadAgent(autonomous_agent.AutonomousAgent):
                     }]
         return sensors
 
-    def tick(self, ego_id, input_data):
+    def tick(self, ego_id, input_data, timestamp=None):
         #print(input_data['bev'])
         #self.step += 1
         encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 20]
@@ -366,6 +399,19 @@ class VadAgent(autonomous_agent.AutonomousAgent):
         # Allow for (pos, cmd, pos_world) tuples
         near_node, near_command = route_out[0], route_out[1]
         near_world = route_out[2] if len(route_out) > 2 else None
+        if self.route_debugger:
+            self.route_debugger.log_tick(
+                ego_id=ego_id,
+                tick_index=self.step,
+                timestamp=timestamp if timestamp is not None else time.time(),
+                gps=gps,
+                local_pos=pos,
+                speed=speed,
+                compass=compass,
+                near_node=near_node,
+                near_command=near_command,
+                near_world=near_world,
+            )
 
         if self.debug_log and (self.step % self.log_every == 0):
             ego_actor = CarlaDataProvider.get_hero_actor(hero_id=ego_id)
@@ -422,7 +468,7 @@ class VadAgent(autonomous_agent.AutonomousAgent):
     def run_step_single_vehicle(self, ego_id, input_data, timestamp):
         if not self.initialized:
             self._init()
-        tick_data = self.tick(ego_id, input_data)
+        tick_data = self.tick(ego_id, input_data, timestamp)
 
         
         realtime_mode = os.environ.get('REALTIME_MODE', '0')
@@ -578,6 +624,9 @@ class VadAgent(autonomous_agent.AutonomousAgent):
         outfile.close()
 
     def destroy(self):
+        if self.route_debugger:
+            self.route_debugger.finalize()
+            self.route_debugger = None
         del self.model
         torch.cuda.empty_cache()
 

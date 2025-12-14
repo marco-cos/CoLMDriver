@@ -1,11 +1,14 @@
 # Python-gitignore: https://github.com/github/gitignore/blob/main/Python.gitignore
 
 Bench2DriveZoo/
+ChatScene/log
+CoLMDriver/ChatScene/oldexamplescenarios
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+
 
 # C extensions
 *.so
