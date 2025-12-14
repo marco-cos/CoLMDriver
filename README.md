@@ -313,6 +313,44 @@ The downloaded checkpoints should follow this structure:
         |--TCP
             |--new.ckpt
 ```
+### TCP Environment Setup
+1. **Create TCP conda environment**
+```bash
+cd CoLMDriver
+conda env create -f model_envs/tcp.yaml -n tcp
+conda activate tcp
+```
+2. **Set CARLA path environment variables**
+```bash
+export CARLA_ROOT=PATHTOYOURREPOROOT/CoLMDriver/external_paths/carla_root
+export PYTHONPATH=$CARLA_ROOT/PythonAPI:$CARLA_ROOT/PythonAPI/carla:$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.10-py3.7-linux-x86_64.egg
+```
+
+3. **Run TCP on Interdrive**
+```bash
+# CARLA must already be running on port 2000
+bash scripts/eval/eval_mode.sh 0 2000 tcp ideal Interdrive_all
+```
+
+### CoDriving Environment Setup
+1. **Create CoDriving conda environment**
+```bash
+cd CoLMDriver
+conda env create -f model_envs/codriving.yaml -n codriving
+conda activate codriving
+```
+2. **Set CARLA path environment variables**
+```bash
+export CARLA_ROOT=PATHTOYOURREPOROOT/CoLMDriver/external_paths/carla_root
+export PYTHONPATH=$CARLA_ROOT/PythonAPI:$CARLA_ROOT/PythonAPI/carla:$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.10-py3.7-linux-x86_64.egg
+```
+
+3. **Run TCP on Interdrive**
+```bash
+bash scripts/eval/eval_mode.sh 0 2000 codriving ideal Interdrive_all
+```
+
+
 ### LMDrive Environment Setup
 
 1. **Clone LMDrive into the assets directory**
