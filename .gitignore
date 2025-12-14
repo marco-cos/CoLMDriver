@@ -2,7 +2,8 @@
 
 Bench2DriveZoo/
 ChatScene/log
-CoLMDriver/ChatScene/oldexamplescenarios
+ChatScene/oldlog
+ChatScene/oldexamplescenarios
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

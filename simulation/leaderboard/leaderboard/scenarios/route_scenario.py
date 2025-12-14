@@ -49,7 +49,7 @@ from srunner.scenariomanager.scenarioatomics.atomic_criteria import (CollisionTe
                                                                      ActorSpeedAboveThresholdTest)
 from srunner.tools.scenario_helper import get_location_in_distance_from_wp
 
-from leaderboard.utils.route_parser import RouteParser, TRIGGER_THRESHOLD, TRIGGER_ANGLE_THRESHOLD
+from leaderboard.utils.route_parser import RouteParser, TRIGGER_THRESHOLD, TRIGGER_ANGLE_THRESHOLD, get_ego_vehicle_model
 from leaderboard.utils.route_manipulation import interpolate_trajectory
 from leaderboard.sensors.fixed_sensors import TrafficLightSensor
 from simulation.scenario_runner.srunner.scenarios import ScenarioClassRegistry
@@ -623,7 +623,10 @@ class RouteScenario(BasicScenario):
             elevate_transform.location.z += (0.5)
             print("ego id:{}".format(j))
             print("transform:{}".format(elevate_transform))
-            ego_vehicle = CarlaDataProvider.request_new_actor('vehicle.lincoln.mkz2017',
+            # Get vehicle model from manifest (for promoted NPCs) or use default
+            vehicle_model = get_ego_vehicle_model(j, default='vehicle.lincoln.mkz2017')
+            print("vehicle model:{}".format(vehicle_model))
+            ego_vehicle = CarlaDataProvider.request_new_actor(vehicle_model,
                                                             elevate_transform,
                                                             rolename='hero_{}'.format(j))
             ego_vehicles.append(ego_vehicle)
@@ -1050,7 +1053,7 @@ class RouteScenario(BasicScenario):
                 ),
             )
 
-            should_snap_to_road = role != "static"  # keep static props at their authored pose
+            should_snap_to_road = role not in ("static", "static_prop")  # keep static props at their authored pose
             if world_map is not None and should_snap_to_road:
                 snapped_wp = world_map.get_waypoint(
                     spawn_tf.location,
@@ -1060,7 +1063,7 @@ class RouteScenario(BasicScenario):
                 if snapped_wp is not None:
                     spawn_tf = snapped_wp.transform
 
-            if role != "static":
+            if role not in ("static", "static_prop"):
                 spawn_tf.location.z += 0.5
 
             rolename = actor_cfg.get("rolename") or actor_cfg["name"]
@@ -1081,7 +1084,7 @@ class RouteScenario(BasicScenario):
 
             self.other_actors.append(new_actor)
 
-            if role == "static":
+            if role in ("static", "static_prop"):
                 try:
                     new_actor.set_simulate_physics(False)
                 except Exception:  # pylint: disable=broad-except

@@ -16,8 +16,8 @@ ANSI_ESCAPE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 STEP_TIME_PATTERN = re.compile(r"step infer time:\s*([0-9.]+)")
 FRAME_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 LABEL_PADDING = 14
-VEHICLE_DIR_PATTERN = re.compile(r"^(?:ego_vehicle|rgb_front)_(\d+)$")
-ALLOWED_STREAM_PREFIXES = ("ego_vehicle_", "rgb_front_")
+VEHICLE_DIR_PATTERN = re.compile(r"^(?:ego_vehicle|rgb_front|meta)_(\d+)$")
+ALLOWED_STREAM_PREFIXES = ("ego_vehicle_", "rgb_front_", "meta_" )
 
 
 @dataclass
@@ -32,8 +32,7 @@ class NegotiationOverlay:
     id: int
     frame_index: int
     hold_frames: int
-    messages_by_vehicle: Dict[int, List[str]]
-    global_messages: List[str]
+    lines: List[str]
     color: Tuple[int, int, int]
 
 
@@ -83,6 +82,19 @@ def _scenario_has_vehicle_images(scenario_dir: Path) -> bool:
         for item in child.iterdir():
             if item.is_file() and item.suffix.lower() in FRAME_EXTENSIONS:
                 return True
+    return False
+
+
+def _scenario_has_flat_images(scenario_dir: Path) -> bool:
+    """Return True if scenario_dir contains image files directly (no vehicle subfolders required)."""
+    if not scenario_dir.is_dir():
+        return False
+    try:
+        for item in scenario_dir.iterdir():
+            if item.is_file() and item.suffix.lower() in FRAME_EXTENSIONS:
+                return True
+    except Exception:
+        return False
     return False
 
 
@@ -219,33 +231,23 @@ def parse_negotiation_events(
         ):
             return
 
-        messages_by_vehicle: Dict[int, List[str]] = defaultdict(list)
-        global_lines: List[str] = []
-
-        turn_index = 0
+        ordered_lines: List[str] = []
         for car_id, raw_text in current_messages:
             clean_text = (raw_text or "").strip()
-            turn_index += 1
-            vehicle_prefix = f"Vehicle {car_id}: " if car_id is not None else ""
-            numbered_text = f"{turn_index}. {vehicle_prefix}{clean_text if clean_text else '(no message)'}"
-            if car_id is None:
-                global_lines.append(numbered_text)
-            else:
-                messages_by_vehicle[car_id].append(numbered_text)
-
+            clean_text = re.sub(r"^ID\\s*\\d+\\s*:\\s*", "", clean_text, flags=re.IGNORECASE)
+            actor_label = f"Vehicle {car_id}" if car_id is not None else "Global"
+            line = f"{actor_label}: {clean_text if clean_text else '(no message)'}"
+            ordered_lines.append(line)
         if current_action_list:
-            global_lines.append(f"Action List: {current_action_list}")
+            ordered_lines.append(f"Action List: {current_action_list}")
 
         if current_short_analysis:
-            global_lines.append(f"Short Analysis: {current_short_analysis}")
+            ordered_lines.append(f"Short Analysis: {current_short_analysis}")
 
-        if not messages_by_vehicle and not global_lines:
+        if not ordered_lines:
             return
 
-        word_count = 0
-        for lines in messages_by_vehicle.values():
-            word_count += sum(len(line.split()) for line in lines if line.strip())
-        word_count += sum(len(line.split()) for line in global_lines if line.strip())
+        word_count = sum(len(line.split()) for line in ordered_lines if line.strip())
 
         hold_seconds = max(min_hold_seconds, (word_count / words_per_second) * reading_factor)
         hold_frames = max(1, int(round(hold_seconds * fps)))
@@ -257,8 +259,7 @@ def parse_negotiation_events(
                 id=event_counter,
                 frame_index=frame_index,
                 hold_frames=hold_frames,
-                messages_by_vehicle={k: v for k, v in sorted(messages_by_vehicle.items())},
-                global_messages=global_lines[:],
+                lines=ordered_lines[:],
                 color=color,
             )
         )
@@ -515,15 +516,19 @@ def render_negotiation_slot(
             cv2.LINE_AA,
         )
         bold_prefix: Optional[str] = None
-        number_match = re.match(r"(\d+\.\s)", line)
-        if number_match:
-            bold_prefix = number_match.group(1)
+        vehicle_match = re.match(r"(Vehicle\s+\d+\s*:\s*)", line)
+        if vehicle_match:
+            bold_prefix = vehicle_match.group(1)
         else:
-            lowered_line = line.lower()
-            if lowered_line.startswith("action list:"):
-                bold_prefix = line[: len("Action List:")]
-            elif lowered_line.startswith("short analysis:"):
-                bold_prefix = line[: len("Short Analysis:")]
+            number_match = re.match(r"(\d+\.\s)", line)
+            if number_match:
+                bold_prefix = number_match.group(1)
+            else:
+                lowered_line = line.lower()
+                if lowered_line.startswith("action list:"):
+                    bold_prefix = line[: len("Action List:")]
+                elif lowered_line.startswith("short analysis:"):
+                    bold_prefix = line[: len("Short Analysis:")]
 
         if bold_prefix:
             bold_thickness = max(thickness + 1, thickness * 2)
@@ -555,7 +560,9 @@ def build_video(
     base_height, base_width = first_frame.shape[:2]
     target_size = (max(1, base_width // resize_factor), max(1, base_height // resize_factor))
     combined_height = target_size[1] * len(streams)
-    column_width = max(220, int(round(target_size[0] * 0.4)))
+    # If simple mode (no negotiation events), omit sidebar column entirely.
+    simple_mode = (not negotiation_events)
+    column_width = 0 if simple_mode else max(220, int(round(target_size[0] * 0.4)))
     total_width = target_size[0] + column_width
 
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -577,7 +584,6 @@ def build_video(
             active_events.append({"event": event, "remaining": event.hold_frames})
 
         frames: List[np.ndarray] = []
-        stream_overlays: List[List[Tuple[int, Tuple[int, int, int], List[str]]]] = []
         for stream in streams:
             image_index = min(frame_idx, len(stream.image_paths) - 1)
             image = cv2.imread(str(stream.image_paths[image_index]))
@@ -585,71 +591,44 @@ def build_video(
                 raise RuntimeError(f"Unable to read {stream.image_paths[image_index]}")
             image = cv2.resize(image, target_size)
             image, _ = add_label(image, stream.label)
-
-            overlays = []
-            for active in active_events:
-                event = active["event"]  # type: ignore[assignment]
-                lines: List[str] = []
-                vehicle_lines = event.messages_by_vehicle.get(stream.index, [])
-                if vehicle_lines:
-                    lines.extend(vehicle_lines)
-                if event.global_messages:
-                    lines.extend(event.global_messages)
-                if lines:
-                    overlays.append((event.id, event.color, lines))
-
-            overlays.sort(key=lambda item: item[0])
-            if overlays:
-                overlays = [overlays[-1]]
-
             frames.append(image)
-            stream_overlays.append(overlays)
 
         combined = frames[0] if len(frames) == 1 else cv2.vconcat(frames)
-        column = np.zeros((combined_height, column_width, 3), dtype=np.uint8)
-        column[:] = (24, 24, 24)
+        if not simple_mode:
+            column = np.zeros((combined_height, column_width, 3), dtype=np.uint8)
+            column[:] = (24, 24, 24)
 
-        for stream_idx, overlays in enumerate(stream_overlays):
-            top = int(round(stream_idx * target_size[1]))
-            bottom = int(round(top + target_size[1]))
-            slot_height = max(1, bottom - top)
-            if slot_height <= 0:
-                continue
-
-            event_data: Optional[Tuple[int, Tuple[int, int, int], List[str]]] = (
-                overlays[0] if overlays else None
+            active_event: Optional[NegotiationOverlay] = (
+                active_events[-1]["event"] if active_events else None  # type: ignore[index]
             )
-
-            if event_data is None:
-                border_thickness = max(2, int(round(slot_height * 0.01)))
+            if active_event:
+                render_negotiation_slot(
+                    column,
+                    0,
+                    0,
+                    column_width,
+                    combined_height,
+                    active_event.lines,
+                    active_event.color,
+                )
+            else:
+                border_thickness = max(2, int(round(combined_height * 0.01)))
                 cv2.rectangle(
                     column,
-                    (0, top),
-                    (column_width - 1, top + slot_height - 1),
+                    (0, 0),
+                    (column_width - 1, combined_height - 1),
                     (45, 45, 45),
                     -1,
                 )
                 cv2.rectangle(
                     column,
-                    (0, top),
-                    (column_width - 1, top + slot_height - 1),
+                    (0, 0),
+                    (column_width - 1, combined_height - 1),
                     (0, 0, 0),
                     border_thickness,
                 )
-                continue
 
-            _, color, slot_lines = event_data
-            render_negotiation_slot(
-                column,
-                0,
-                top,
-                column_width,
-                slot_height,
-                slot_lines,
-                color,
-            )
-
-        final_frame = cv2.hconcat([column, combined])
+        final_frame = combined if simple_mode else cv2.hconcat([column, combined])
         writer.write(final_frame)
 
         for active in list(active_events):
@@ -730,8 +709,12 @@ def main() -> None:
     if not root.exists():
         raise FileNotFoundError(f"Input directory {root} does not exist.")
 
+    # Support two modes:
+    # 1) Scenario mode: vehicle subfolders like rgb_front_0 with images.
+    # 2) Flat mode: input_dir itself contains image files; build a single-stream video.
     is_single_scenario = _scenario_has_vehicle_images(root)
-    if is_single_scenario:
+    is_flat_images = _scenario_has_flat_images(root)
+    if is_single_scenario or is_flat_images:
         scenario_dirs = [root]
     else:
         scenario_dirs = discover_scenario_dirs(root)
@@ -775,28 +758,36 @@ def main() -> None:
         else:
             output_path = scenario_dir / "output_v3.mp4"
 
-        streams = list_vehicle_streams(scenario_dir)
-
-        log_path = (
-            Path(args.log_path).expanduser().resolve()
-            if args.log_path
-            else discover_log_path(scenario_dir)
-        )
-        if log_path and not log_path.exists():
-            log_path = None
-
-        negotiation_events = parse_negotiation_events(
-            log_path,
-            args.fps,
-            args.min_hold_seconds,
-            args.words_per_minute,
-            args.reading_factor,
-        )
-
-        if not negotiation_events:
-            print("No negotiation events found; proceeding without transcript overlays.")
+        # In flat mode, build a single stream from images directly in the folder.
+        if _scenario_has_flat_images(scenario_dir):
+            image_paths = sorted(
+                [p for p in scenario_dir.iterdir() if p.is_file() and p.suffix.lower() in FRAME_EXTENSIONS],
+                key=lambda p: p.stem,
+            )
+            streams = [VehicleStream(index=0, label=f"{scenario_dir.name}", image_paths=image_paths)]
+            negotiation_events: List[NegotiationOverlay] = []
         else:
-            print(f"Configured {len(negotiation_events)} negotiation overlay(s).")
+            streams = list_vehicle_streams(scenario_dir)
+
+            log_path = (
+                Path(args.log_path).expanduser().resolve()
+                if args.log_path
+                else discover_log_path(scenario_dir)
+            )
+            if log_path and not log_path.exists():
+                log_path = None
+
+            negotiation_events = parse_negotiation_events(
+                log_path,
+                args.fps,
+                args.min_hold_seconds,
+                args.words_per_minute,
+                args.reading_factor,
+            )
+            if not negotiation_events:
+                print("No negotiation events found; proceeding without transcript overlays.")
+            else:
+                print(f"Configured {len(negotiation_events)} negotiation overlay(s).")
 
         build_video(
             output_path=output_path,

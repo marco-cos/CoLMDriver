@@ -23,12 +23,14 @@ TRIGGER_THRESHOLD = 2.0  # Threshold to say if a trigger position is new or repe
 TRIGGER_ANGLE_THRESHOLD = 10  # Threshold to say if two angles can be considering matching when matching transforms.
 
 _CUSTOM_ACTOR_MANIFEST_CACHE = None
+_EGO_VEHICLE_MODELS_CACHE = None  # Cache for ego vehicle models from manifest
 ROLE_DEFAULTS: Dict[str, Dict[str, object]] = {
     "npc": {"model": "vehicle.tesla.model3", "speed": 8.0},
     "pedestrian": {"model": "walker.pedestrian.0001", "speed": 1.5},
     "bicycle": {"model": "vehicle.diamondback.century", "speed": 4.0},
     "bike": {"model": "vehicle.diamondback.century", "speed": 4.0},
-    "static": {"model": "vehicle.carlamotors.carlacola", "speed": 0.0},
+    "static": {"model": "static.prop.trafficcone01", "speed": 0.0},
+    "static_prop": {"model": "static.prop.trafficcone01", "speed": 0.0},
 }
 
 
@@ -96,6 +98,66 @@ def _load_custom_actor_manifest() -> Dict[str, List[Dict[str, object]]]:
 
     _CUSTOM_ACTOR_MANIFEST_CACHE = actor_entries
     return _CUSTOM_ACTOR_MANIFEST_CACHE
+
+
+def _load_ego_vehicle_models() -> Dict[int, str]:
+    """
+    Load ego vehicle models from the manifest.
+    Returns a dict mapping ego index (0, 1, 2, ...) to vehicle model string.
+    """
+    global _EGO_VEHICLE_MODELS_CACHE  # pylint: disable=global-statement
+
+    if _EGO_VEHICLE_MODELS_CACHE is not None:
+        return _EGO_VEHICLE_MODELS_CACHE
+
+    manifest_env = os.environ.get("CUSTOM_ACTOR_MANIFEST")
+    if not manifest_env:
+        _EGO_VEHICLE_MODELS_CACHE = {}
+        return _EGO_VEHICLE_MODELS_CACHE
+
+    manifest_path = Path(manifest_env).expanduser().resolve()
+    if not manifest_path.exists():
+        _EGO_VEHICLE_MODELS_CACHE = {}
+        return _EGO_VEHICLE_MODELS_CACHE
+
+    try:
+        manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        _EGO_VEHICLE_MODELS_CACHE = {}
+        return _EGO_VEHICLE_MODELS_CACHE
+
+    ego_models: Dict[int, str] = {}
+    ego_entries = manifest_data.get("ego", [])
+    if isinstance(ego_entries, list):
+        for entry in ego_entries:
+            # Extract ego index from filename pattern like "town01_custom_ego_actor_1.xml"
+            file_path = entry.get("file", "")
+            model = entry.get("model")
+            if model:
+                # Try to extract index from filename
+                import re
+                match = re.search(r'_actor_(\d+)\.xml$', file_path)
+                if match:
+                    ego_idx = int(match.group(1))
+                    ego_models[ego_idx] = model
+
+    _EGO_VEHICLE_MODELS_CACHE = ego_models
+    return _EGO_VEHICLE_MODELS_CACHE
+
+
+def get_ego_vehicle_model(ego_index: int, default: str = "vehicle.lincoln.mkz2017") -> str:
+    """
+    Get the vehicle model for a specific ego vehicle index.
+    
+    Args:
+        ego_index: The ego vehicle index (0, 1, 2, ...)
+        default: Default model if not specified in manifest
+        
+    Returns:
+        The CARLA vehicle blueprint ID (e.g., 'vehicle.kawasaki.ninja')
+    """
+    ego_models = _load_ego_vehicle_models()
+    return ego_models.get(ego_index, default)
 
 
 def _get_default_actor_speed() -> float:

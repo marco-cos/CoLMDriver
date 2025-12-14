@@ -22,6 +22,7 @@ from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
 from srunner.scenariomanager.timer import GameTime
 from srunner.scenariomanager.watchdog import Watchdog
 from srunner.scenariomanager.scenarioatomics.atomic_criteria import RouteCompletionTest
+from leaderboard.scenarios.scenarioatomics.atomic_criteria import ActorSpeedAboveThresholdTest
 
 from leaderboard.autoagents.agent_wrapper import AgentWrapper, AgentError
 from leaderboard.envs.sensor_interface import SensorReceivedNoData
@@ -295,28 +296,44 @@ class ScenarioManager(object):
             spectator.set_transform(carla.Transform(ego_trans.location + carla.Location(z=50),
                                                         carla.Rotation(pitch=-90)))
 
-            # terminate route scenarios once all route completion criteria succeed
-            all_routes_completed = True
-            for scenario_instance in self.scenario:
+            # terminate route scenarios once all egos are either completed OR blocked
+            all_egos_done = True
+            for idx, scenario_instance in enumerate(self.scenario):
                 if scenario_instance is None:
                     continue
                 criteria = scenario_instance.get_criteria()
                 if not criteria:
-                    all_routes_completed = False
+                    print(f"[DEBUG] Ego {idx}: No criteria found")
+                    all_egos_done = False
                     break
-                completion_found = False
+                # Check if this ego is either completed (SUCCESS) or blocked (FAILURE)
+                ego_completed = False
+                ego_blocked = False
+                # Debug: Show criterion types (every 10 seconds)
+                import time
+                if not hasattr(self, '_last_debug_time'):
+                    self._last_debug_time = 0
+                if time.time() - self._last_debug_time > 10:
+                    print(f"[DEBUG] Ego {idx}: Found {len(criteria)} criteria: {[type(c).__name__ for c in criteria]}")
+                    for c in criteria:
+                        print(f"[DEBUG]   - {type(c).__name__}: status={getattr(c, 'test_status', 'N/A')}")
+                    self._last_debug_time = time.time()
                 for criterion in criteria:
                     if isinstance(criterion, RouteCompletionTest):
-                        completion_found = True
-                        if criterion.test_status != "SUCCESS":
-                            all_routes_completed = False
-                            break
-                if not completion_found:
-                    all_routes_completed = False
-                if not all_routes_completed:
+                        if criterion.test_status == "SUCCESS":
+                            ego_completed = True
+                            print(f"[DEBUG] Ego {idx}: RouteCompletionTest SUCCESS")
+                    elif isinstance(criterion, ActorSpeedAboveThresholdTest):
+                        if criterion.test_status == "FAILURE":
+                            ego_blocked = True
+                            print(f"[DEBUG] Ego {idx}: AgentBlockedTest FAILURE")
+                # Ego is "done" if it completed OR if it's blocked
+                if not (ego_completed or ego_blocked):
+                    all_egos_done = False
                     break
 
-            if all_routes_completed and self._running:
+            if all_egos_done and self._running:
+                print(f"[DEBUG] ALL EGOS DONE - setting _running = False")
                 self._running = False
 
         if self._running and self.get_running_status():
