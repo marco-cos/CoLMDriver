@@ -1,14 +1,52 @@
-# CoLMDriver: LLM-based Negotiation Benefits Cooperative Autonomous Driving (ICCV2025)
+# MDriveBench: MDriveBench: Multi-Agent Multi-Granular Driving Benchmark
 
-CoLMDriver is the first full-pipeline LLM-based cooperative driving system, enabling effective language-based negotiation and real-time driving control (accepted by ICCV 2025). 
+**TODO:** Add project overview
 
-Additionally, we introduce InterDrive, a CARLA based simulation benchmark comprising 10 challenging interactive driving scenarios for evaluating V2V cooperation. 
+---
 
-Check our [paper](https://arxiv.org/pdf/2503.08683) for more details.
+## Repository Structure and Scope
 
-![framework](img/colmdriver_pipeline.png)
+This repository implements **MDriveBench**, a multi-agent driving benchmark.  
+It was originally built on top of **CoLMDriver**; CoLMDriver is now one of multiple models in the repository, and the benchmark infrastructure has been built on top of it.
 
-## Installation
+MDriveBench provides:
+- Benchmark infrastructure (CARLA integration, scenarios, evaluation, analysis)
+- Multiple baseline and LLM-based driving models (TCP, CoDriving, LMDrive, UniAD, CoLMDriver, and VAD)
+- Training code for CoLMDriver components
+
+---
+
+## Table of Contents
+
+- [Global Setup](#global-setup)
+  - [General Setup](#general-setup)
+  - [vLLM env](#vllm-env)
+  - [CoLMDriver env](#colmdriver-env)
+- [Baseline Evaluation Setup](#baseline-evaluation-setup)
+  - [Evaluation of baselines](#evaluation-of-baselines)
+  - [TCP Environment Setup](#tcp-environment-setup)
+  - [CoDriving Environment Setup](#codriving-environment-setup)
+  - [LMDrive Environment Setup](#lmdrive-environment-setup)
+  - [UniAD Environment Setup](#uniad-environment-setup)
+  - [VAD Environment Setup](#vad-environment-setup)
+  - [CoLMDriver Model Setup](#colmdriver-model-setup)
+- [Benchmark Evaluation on InterDrive](#benchmark-evaluation-on-interdrive)
+- [LLM-Driven Scenario Generation](#llm-driven-scenario-generation)
+- [Results Analysis and Visualization](#results-analysis-and-visualization)
+  - [Results Analysis](#results-analysis)
+  - [Visualizing Results](#visualizing-results)
+- [Dataset](#dataset)
+- [Training](#training)
+  - [Perception module](#perception-module)
+  - [Planning module](#planning-module)
+  - [VLM planner](#vlm-planner)
+- [Acknowledgements](#acknowledgements)
+
+---
+
+## Global Setup
+
+### General Setup
 Two environments are needed: 'vllm' for MLLMs inference and 'colmdriver' for simulation.
 
 ### vLLM env
@@ -119,10 +157,131 @@ python setup.py install
 cd ..
 ```
 
+---
 
-## Evaluation on Interdrive benchmark
+## Baseline Evaluation Setup
 
-### Evaluation of CoLMDriver
+### Evaluation of baselines
+Setup and get ckpts.
+
+| Methods   | TCP | CoDriving               |
+|-----------|---------|---------------------------|
+| Installation Guide  | [github](https://github.com/OpenDriveLab/TCP)  | [github](https://github.com/CollaborativePerception/V2Xverse) |
+| Checkpoints     |  [google drive](https://drive.google.com/file/d/1D-10aMUAOPk1yiOr-PvSOJMS_xi_eR7U/view?usp=sharing)  |  [google drive](https://drive.google.com/file/d/1Izg9wZ3ktR-mwn7J_ZqxrwBmtI1YJ6Xi/view?usp=sharing)   |
+
+The downloaded checkpoints should follow this structure:
+```Shell
+|--CoLMDriver
+    |--ckpt
+        |--codriving
+            |--perception
+            |--planning
+        |--TCP
+            |--new.ckpt
+```
+
+### TCP Environment Setup
+1. **Create TCP conda environment**
+```bash
+cd CoLMDriver
+conda env create -f model_envs/tcp_codriving.yaml -n tcp_codriving
+conda activate tcp_codriving
+```
+2. **Set CARLA path environment variables**
+```bash
+export CARLA_ROOT=PATHTOYOURREPOROOT/CoLMDriver/external_paths/carla_root
+export PYTHONPATH=$CARLA_ROOT/PythonAPI:$CARLA_ROOT/PythonAPI/carla:$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.10-py3.7-linux-x86_64.egg
+```
+
+### CoDriving Environment Setup
+1. **Create CoDriving conda environment**
+```bash
+cd CoLMDriver
+conda env create -f model_envs/tcp_codriving.yaml -n tcp_codriving
+conda activate tcp_codriving
+```
+2. **Set CARLA path environment variables**
+```bash
+export CARLA_ROOT=PATHTOYOURREPOROOT/CoLMDriver/external_paths/carla_root
+export PYTHONPATH=$CARLA_ROOT/PythonAPI:$CARLA_ROOT/PythonAPI/carla:$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.10-py3.7-linux-x86_64.egg
+```
+
+### LMDrive Environment Setup
+
+1. **Clone LMDrive into the assets directory**
+```bash
+git clone https://github.com/opendilab/LMDrive simulation/assets/LMDrive
+```
+
+2. **Prepare LMDrive checkpoints**
+```bash
+cd simulation/assets/LMDrive
+mkdir -p ckpt
+```
+
+Download and place the following into `simulation/assets/LMDrive/ckpt`:
+- Vision encoder: https://huggingface.co/OpenDILabCommunity/LMDrive-vision-encoder-r50-v1.0  
+- LMDrive LLaVA weights: https://huggingface.co/OpenDILabCommunity/LMDrive-llava-v1.5-7b-v1.0  
+
+Download and place the following into `CoLMDriver/ckpt/llava-v1.5-7b`:
+- Base LLaVA model: https://huggingface.co/liuhaotian/llava-v1.5-7b  
+
+3. **Create environment and install dependencies**
+```bash
+cd CoLMDriver
+conda env create -f model_envs/lmdrive.yaml -n lmdrive
+conda activate lmdrive
+
+pip install carla-birdeye-view==1.1.1 --no-deps
+pip install -e simulation/assets/LMDrive/vision_encoder
+```
+
+4. **Set CARLA path environment variables**
+```bash
+export CARLA_ROOT=PATHTOYOURREPOROOT/CoLMDriver/external_paths/carla_root
+export PYTHONPATH=$CARLA_ROOT/PythonAPI:$CARLA_ROOT/PythonAPI/carla:$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.10-py3.7-linux-x86_64.egg
+```
+
+### UniAD Environment Setup
+
+UniAD is a unified perception–prediction–planning autonomous driving model.  
+We evaluate it on the InterDrive benchmark using its official pretrained weights and a standardized conda environment to avoid dependency conflicts.
+
+To ensure consistent and reproducible evaluation of the UniAD baseline model, we standardize the environment setup using a pre-built conda environment.
+This avoids dependency conflicts and ensures that anyone can run UniAD without rebuilding environments from scratch.
+
+The YAML file for the UniAD environment is located in:
+
+`model_envs/uniad_env.yaml`
+
+To create and activate the environment:
+
+```bash
+conda env create -f model_envs/uniad_env.yaml -n uniad_env
+conda activate uniad_env
+```
+
+UniAD runs inside the `uniad_env` conda environment, which contains all required CUDA, PyTorch, CARLA, and UniAD dependencies.
+
+#### Additional Files
+
+Create a ckpt/UniAD directory if it does not exist:
+`mkdir -p CoLMDriver/ckpt/UniAD`
+
+Download the UniAD checkpoint from https://huggingface.co/rethinklab/Bench2DriveZoo/blob/main/uniad_base_b2d.pth
+and place it here:
+
+`CoLMDriver/ckpt/UniAD/uniad_base_b2d.pth`
+
+Download the UniAD config file from https://github.com/Thinklab-SJTU/Bench2DriveZoo/blob/uniad/vad/adzoo/uniad/configs/stage2_e2e/base_e2e_b2d.py and place it in:
+
+`simulation/assets/UniAD/base_e2e_b2d.py`
+
+### VAD Environment Setup
+
+**TODO:** Add environment setup instructions for VAD.
+
+### CoLMDriver Model Setup
 
 **Step 1:** Download checkpoints from [Google drive](https://drive.google.com/file/d/1z3poGdoomhujCNQtoQ80-BCO34GTOLb-/view?usp=sharing). The downloaded checkpoints of CoLMDriver should follow this structure:
 ```Shell
@@ -166,34 +325,88 @@ CUDA_VISIBLE_DEVICES=7 vllm serve ckpt/colmdriver/LLM --port 8888 --max-model-le
 
 Note: make sure that the selected ports (1111,8888) are not occupied by other services. If you use other ports, please modify values of key 'comm_client' and 'vlm_client' in `simulation/leaderboard/team_code/agent_config/colmdriver_config.yaml` accordingly.
 
-**Step 3:** Run CARLA, run CoLMDriver
-```Shell
-#Enter Conda ENV
-conda activate colmdriver
+---
+## Benchmark Evaluation on InterDrive
 
-# Start CARLA server, if port 2000 is already in use, choose another
+All models are evaluated on the InterDrive benchmark using a unified interface:
+
+```bash
+bash scripts/eval/eval_mode.sh <GPU_ID> <CARLA_PORT> <MODEL_NAME> <MODE> <SCENARIO_SET>
+````
+
+Where:
+
+* `<MODEL_NAME>` ∈ `{ colmdriver, tcp, codriving, lmdrive, uniad, vad }`
+* `<MODE>` ∈ `{ ideal, realtime }` (where supported)
+* `<SCENARIO_SET>` ∈ `{ Interdrive_all, Interdrive_no_npc, Interdrive_npc }`
+
+Make sure you have:
+
+* The corresponding conda environment activated for each model (e.g., `tcp_codriving`, `lmdrive`, `uniad_env`, `colmdriver`, etc.)
+* Any model-specific services running (e.g., VLM/LLM servers for CoLMDriver)
+
+### Start CARLA
+
+```bash
+# Start CARLA server; change port if 2000 is already in use
 CUDA_VISIBLE_DEVICES=0 ./external_paths/carla_root/CarlaUE4.sh --world-port=2000 -prefer-nvidia
+```
 
+If CARLA segfaults on startup, try:
 
-#If CARLA seg faults on startup, try this command:
+```bash
 conda install -c conda-forge libglvnd mesa-libgl-devel libegl libxrender libxext libxi
+```
 
-# Open another terminal
+### Example evaluation commands
 
-# Evaluate CoLMDriver on Interdrive(92 tests), 0 is CUDA id, 2000 is CARLA port (be consistent with your CARLA server)
+```bash
+# TCP, full InterDrive
+bash scripts/eval/eval_mode.sh 0 2000 tcp ideal Interdrive_all
+
+# CoDriving, full InterDrive
+bash scripts/eval/eval_mode.sh 0 2000 codriving ideal Interdrive_all
+
+# LMDrive, full InterDrive
+bash scripts/eval/eval_mode.sh 0 2000 lmdrive ideal Interdrive_all
+
+# UniAD, full InterDrive
+bash scripts/eval/eval_mode.sh 0 2000 uniad ideal Interdrive_all
+
+# CoLMDriver: full benchmark, realtime mode, and subsets
 bash scripts/eval/eval_mode.sh 0 2000 colmdriver ideal Interdrive_all
-
-# Evaluate CoLMDriver on Interdrive, considering inference latency
 bash scripts/eval/eval_mode.sh 0 2000 colmdriver realtime Interdrive_all
-
-# Evaluate CoLMDriver on Interdrive(46 tests), in scenarios with no NPC, only collaborative vehicles
 bash scripts/eval/eval_mode.sh 0 2000 colmdriver ideal Interdrive_no_npc
-
-# Evaluate CoLMDriver on Interdrive(46 tests), in scenarios with NPC (other traffic participants)
 bash scripts/eval/eval_mode.sh 0 2000 colmdriver ideal Interdrive_npc
 ```
 
-The results will be saved at `results/results_driving_colmdriver`. To analyze and visualize the results:
+Evaluation results are saved under:
+
+```text
+results/results_driving_<MODEL_NAME>
+```
+
+For example:
+
+* `results/results_driving_colmdriver`
+* `results/results_driving_tcp`
+* `results/results_driving_lmdrive`
+
+It’s recommended to run the LLM server, VLM server, CARLA server, and evaluation script in separate terminals.
+CARLA processes may fail to stop cleanly; kill them manually if needed.
+
+---
+
+## LLM-Driven Scenario Generation
+
+**TODO:** Add documentation for LLM-driven scenario generation, including:
+- Natural-language specification of driving scenarios
+- Conversion from language to executable scenarios
+- Support for multi-agent negotiation and coordination behaviors
+
+---
+
+## Results Analysis and Visualization
 
 ### Results Analysis
 
@@ -293,121 +506,7 @@ Features:
 - Progress tracking
 - Font size and text display customization
 
-It's recommended to run LLM/VLM/CARLA_server/CoLMDriver_evaluation in 4 distinct terminals.
-
-### Evaluation of baselines
-Setup and get ckpts.
-
-| Methods   | TCP | CoDriving               |
-|-----------|---------|---------------------------|
-| Installation Guide  | [github](https://github.com/OpenDriveLab/TCP)  | [github](https://github.com/CollaborativePerception/V2Xverse) |
-| Checkpoints     |  [google drive](https://drive.google.com/file/d/1D-10aMUAOPk1yiOr-PvSOJMS_xi_eR7U/view?usp=sharing)  |  [google drive](https://drive.google.com/file/d/1Izg9wZ3ktR-mwn7J_ZqxrwBmtI1YJ6Xi/view?usp=sharing)   |
-
-The downloaded checkpoints should follow this structure:
-```Shell
-|--CoLMDriver
-    |--ckpt
-        |--codriving
-            |--perception
-            |--planning
-        |--TCP
-            |--new.ckpt
-```
-### TCP Environment Setup
-1. **Create TCP conda environment**
-```bash
-cd CoLMDriver
-conda env create -f model_envs/tcp_codriving.yaml -n tcp_codriving
-conda activate tcp_codriving
-```
-2. **Set CARLA path environment variables**
-```bash
-export CARLA_ROOT=PATHTOYOURREPOROOT/CoLMDriver/external_paths/carla_root
-export PYTHONPATH=$CARLA_ROOT/PythonAPI:$CARLA_ROOT/PythonAPI/carla:$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.10-py3.7-linux-x86_64.egg
-```
-
-3. **Run TCP on Interdrive**
-```bash
-# CARLA must already be running on port 2000
-bash scripts/eval/eval_mode.sh 0 2000 tcp ideal Interdrive_all
-```
-
-### CoDriving Environment Setup
-1. **Create CoDriving conda environment**
-```bash
-cd CoLMDriver
-conda env create -f model_envs/tcp_codriving.yaml -n tcp_codriving
-conda activate tcp_codriving
-```
-2. **Set CARLA path environment variables**
-```bash
-export CARLA_ROOT=PATHTOYOURREPOROOT/CoLMDriver/external_paths/carla_root
-export PYTHONPATH=$CARLA_ROOT/PythonAPI:$CARLA_ROOT/PythonAPI/carla:$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.10-py3.7-linux-x86_64.egg
-```
-
-3. **Run TCP on Interdrive**
-```bash
-bash scripts/eval/eval_mode.sh 0 2000 codriving ideal Interdrive_all
-```
-
-
-### LMDrive Environment Setup
-
-1. **Clone LMDrive into the assets directory**
-```bash
-git clone https://github.com/opendilab/LMDrive simulation/assets/LMDrive
-```
-
-2. **Prepare LMDrive checkpoints**
-```bash
-cd simulation/assets/LMDrive
-mkdir -p ckpt
-```
-
-Download and place the following into `simulation/assets/LMDrive/ckpt`:
-- Vision encoder: https://huggingface.co/OpenDILabCommunity/LMDrive-vision-encoder-r50-v1.0  
-- LMDrive LLaVA weights: https://huggingface.co/OpenDILabCommunity/LMDrive-llava-v1.5-7b-v1.0  
-
-Download and place the following into `CoLMDriver/ckpt/llava-v1.5-7b`:
-- Base LLaVA model: https://huggingface.co/liuhaotian/llava-v1.5-7b  
-
-3. **Create environment and install dependencies**
-```bash
-cd CoLMDriver
-conda env create -f model_envs/lmdrive.yaml -n lmdrive
-conda activate lmdrive
-
-pip install carla-birdeye-view==1.1.1 --no-deps
-pip install -e simulation/assets/LMDrive/vision_encoder
-```
-
-4. **Set CARLA path environment variables**
-```bash
-export CARLA_ROOT=PATHTOYOURREPOROOT/CoLMDriver/external_paths/carla_root
-export PYTHONPATH=$CARLA_ROOT/PythonAPI:$CARLA_ROOT/PythonAPI/carla:$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.10-py3.7-linux-x86_64.egg
-```
-
-5. **Run LMDrive on Interdrive**
-```bash
-# CARLA must already be running on port 2000
-bash scripts/eval/eval_mode.sh 0 2000 lmdrive ideal Interdrive_all
-```
-
-Evaluate TCP, CoDriving on Interdrive benchmark:
-
-```Shell
-# Start CARLA server, if port 2000 is already in use, choose another
-CUDA_VISIBLE_DEVICES=0 ./external_paths/carla_root/CarlaUE4.sh --world-port=2000 -prefer-nvidia
-
-# Evaluate TCP on Interdrive
-bash scripts/eval/eval_mode.sh 0 2000 tcp ideal Interdrive_all
-
-# Evaluate CoDriving on Interdrive
-bash scripts/eval/eval_mode.sh 0 2000 codriving ideal Interdrive_all
-```
-
-- CARLA processes may fail to stop，please kill them in time.
-
+---
 
 ## <span id="dataset"> Dataset
 The dataset for training CoLMDriver is obtained from [V2Xverse](https://github.com/CollaborativePerception/V2Xverse), which contains experts behaviors in CARLA. You may get the dataset in two ways:
@@ -440,7 +539,7 @@ The dataset should be linked/stored under `external_paths/data_root/` follow thi
             ...
 ```
 
-## <span id="train"> Training
+## <span id="training"> Training
 
 ### Perception module
 Our perception module follows [CoDriving](https://github.com/CollaborativePerception/V2Xverse).
@@ -489,97 +588,10 @@ Our training data is also provided in [google drive](https://drive.google.com/fi
 
 Using [ms-swift](https://github.com/modelscope/ms-swift) to finetune the MLLMs. Installation and details refer to the official repo. We provide an example script in [MLLMs/finetune.sh](https://github.com/cxliu0314/CoLMDriver/blob/main/MLLMs/finetune.sh)
 
-### UniAD Environment Setup
-
-UniAD is a unified perception–prediction–planning autonomous driving model.  
-We evaluate it on the InterDrive benchmark using its official pretrained weights and a standardized conda environment to avoid dependency conflicts.
-
-To ensure consistent and reproducible evaluation of the UniAD baseline model, we standardize the environment setup using a pre-built conda environment.
-This avoids dependency conflicts and ensures that anyone can run UniAD without rebuilding environments from scratch.
-
-
-The YAML file for the UniAD environment is located in:
-
-`model_envs/uniad_env.yaml`
-
-To create and activate the environment:
-
-```bash
-conda env create -f model_envs/uniad_env.yaml -n uniad_env
-conda activate uniad_env
-```
-
-UniAD runs inside the `uniad_env` conda environment, which contains all required CUDA, PyTorch, CARLA, and UniAD dependencies.
-
-#### Additional Files
-
-Create a ckpt/UniAD directory if it does not exist:
-`mkdir -p CoLMDriver/ckpt/UniAD`
-
-Download the UniAD checkpoint from https://huggingface.co/rethinklab/Bench2DriveZoo/blob/main/uniad_base_b2d.pth
-and place it here:
-
-`CoLMDriver/ckpt/UniAD/uniad_base_b2d.pth`
-
-Download the UniAD config file from https://github.com/Thinklab-SJTU/Bench2DriveZoo/blob/uniad/vad/adzoo/uniad/configs/stage2_e2e/base_e2e_b2d.py and place it in:
-
-`simulation/assets/UniAD/base_e2e_b2d.py`
-
-### Evaluating UniAD on the InterDrive Benchmark
-
-Once the UniAD environment is created and the required checkpoint and config file are placed in the correct directories, UniAD can be evaluated on the InterDrive benchmark using the standard evaluation script.
-
-#### **1. Activate the UniAD environment**
-```bash
-conda activate uniad_env
-```
-
-#### **2. Start a Carla Instance**
-```bash
-CUDA_VISIBLE_DEVICES=0 ./external_paths/carla_root/CarlaUE4.sh --world-port=2000 -prefer-nvidia
-```
-#### **3. Run UniAD on Interdrive**
-In a new terminal:
-```bash 
-conda activate uniad_env
-bash scripts/eval/eval_mode.sh 0 2000 uniad ideal Interdrive_all
-```
-#### **3. Evaluation and Analysis Generation**
-
-To run the evaluation and generate a report analysis, use the same commands as colmdriver, but change the model to uniad, for example:
-
-```bash 
-bash scripts/eval/eval_mode.sh 0 2000 uniad ideal Interdrive_all
-```
-
+---
 
 ## Acknowledgements
 This implementation is based on code from several repositories.
 - [V2Xverse](https://github.com/CollaborativePerception/V2Xverse)
 - [Bench2Drive](https://github.com/Thinklab-SJTU/Bench2Drive)
-
-
-## Todo
-- [x] Checkpoints release of CoLMDriver
-- [x] Training of CoLMDriver
-  - [x] perception
-  - [x] planning
-  - [x] MLLM
-- [ ] Interdrive evaluation
-  - [x] CoLMDriver
-  - [x] CoDriving
-  - [x] TCP
-  - [ ] LMDrive
-  - [ ] UniAD
-  - [ ] VAD
-
-
-## Citation
-```
-@article{liu2025colmdriver,
-  title={CoLMDriver: LLM-based Negotiation Benefits Cooperative Autonomous Driving},
-  author={Liu, Changxing and Liu, Genjia and Wang, Zijun and Yang, Jinchang and Chen, Siheng},
-  journal={arXiv preprint arXiv:2503.08683},
-  year={2025}
-}
-```
+- [CoLMDriver](https://github.com/cxliu0314/CoLMDriver)
