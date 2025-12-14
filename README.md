@@ -317,8 +317,8 @@ The downloaded checkpoints should follow this structure:
 1. **Create TCP conda environment**
 ```bash
 cd CoLMDriver
-conda env create -f model_envs/tcp.yaml -n tcp
-conda activate tcp
+conda env create -f model_envs/tcp_codriving.yaml -n tcp_codriving
+conda activate tcp_codriving
 ```
 2. **Set CARLA path environment variables**
 ```bash
@@ -336,8 +336,8 @@ bash scripts/eval/eval_mode.sh 0 2000 tcp ideal Interdrive_all
 1. **Create CoDriving conda environment**
 ```bash
 cd CoLMDriver
-conda env create -f model_envs/codriving.yaml -n codriving
-conda activate codriving
+conda env create -f model_envs/tcp_codriving.yaml -n tcp_codriving
+conda activate tcp_codriving
 ```
 2. **Set CARLA path environment variables**
 ```bash
