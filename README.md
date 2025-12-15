@@ -279,7 +279,26 @@ Download the UniAD config file from https://github.com/Thinklab-SJTU/Bench2Drive
 
 ### VAD Environment Setup
 
-**TODO:** Add environment setup instructions for VAD.
+The YAML file for the VAD environment is located in:
+
+`model_envs/vad_env.yaml`
+
+1. **Create VAD conda environment**
+```bash
+cd CoLMDriver
+conda env create -f model_envs/vad_env.yaml -n vad
+conda activate vad
+```
+#### **2. Start a Carla Instance**
+```bash
+CUDA_VISIBLE_DEVICES=0 ./external_paths/carla_root/CarlaUE4.sh --world-port=2000 -prefer-nvidia
+```
+
+3. **Run VAD on Interdrive**
+```bash
+# CARLA must already be running on port 2000
+bash scripts/eval/eval_mode.sh 0 2000 vad ideal Interdrive_all
+```
 
 ### CoLMDriver Model Setup
 
