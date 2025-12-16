@@ -289,14 +289,40 @@ cd CoLMDriver
 conda env create -f model_envs/vad_env.yaml -n vad
 conda activate vad
 ```
+Create a ckpt/VAD directory if it does not exist:
+`mkdir -p CoLMDriver/ckpt/VAD`
+
+Download the VAD checkpoint from https://huggingface.co/rethinklab/Bench2DriveZoo/blob/main/vad_b2d_base.pth
+and place it here:
+
+`CoLMDriver/ckpt/VAD/vad_base_b2d.pth`
+
+Download the VAD config file from https://github.com/Thinklab-SJTU/Bench2DriveZoo/blob/uniad/vad/adzoo/uniad/configs/stage2_e2e/base_e2e_b2d.py and place it in:
+
+`simulation/assets/VAD/base_e2e_b2d.py`
+
+### Evaluating VAD on the InterDrive Benchmark
+
+#### **1. Activate the VAD environment**
+```bash
+conda activate vad_env
+```
+
 #### **2. Start a Carla Instance**
 ```bash
 CUDA_VISIBLE_DEVICES=0 ./external_paths/carla_root/CarlaUE4.sh --world-port=2000 -prefer-nvidia
 ```
+#### **3. Run VAD on Interdrive**
+In a new terminal:
+```bash 
+conda activate vad_env
+bash scripts/eval/eval_mode.sh 0 2000 vad ideal Interdrive_all
+```
+#### **3. Evaluation and Analysis Generation**
 
-3. **Run VAD on Interdrive**
-```bash
-# CARLA must already be running on port 2000
+To run the evaluation and generate a report analysis, use the same commands as colmdriver, but change the model to vad, for example:
+
+```bash 
 bash scripts/eval/eval_mode.sh 0 2000 vad ideal Interdrive_all
 ```
 
