@@ -370,6 +370,9 @@ CUDA_VISIBLE_DEVICES=7 vllm serve ckpt/colmdriver/LLM --port 8888 --max-model-le
 
 Note: make sure that the selected ports (1111,8888) are not occupied by other services. If you use other ports, please modify values of key 'comm_client' and 'vlm_client' in `simulation/leaderboard/team_code/agent_config/colmdriver_config.yaml` accordingly.
 
+### Rule-based Baseline
+A rule-based version of the CoLMDriver agent is available for benchmarking. Beyond the primary environment configuration, no additional setup is required to run this version.
+
 ---
 ## Benchmark Evaluation on InterDrive
 
