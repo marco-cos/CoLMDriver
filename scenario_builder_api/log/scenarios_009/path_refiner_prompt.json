@@ -1,0 +1,24 @@
+{
+  "description": "Vehicle 1 goes straight through an intersection. Vehicle 2 approaches from the perpendicular road to the right of Vehicle 1\u2019s approach and turns right onto Vehicle 1\u2019s exit road. Vehicle 3 is traveling in the same direction as Vehicle 1 and starts behind Vehicle 1 in the adjacent lane; Vehicle 3 changes lanes into Vehicle 1\u2019s lane on the exit road. On the exit road, a parked truck partially blocks the right edge of Vehicle 1\u2019s lane near the merge region. After the parked truck, a pedestrian crosses perpendicularly from the left edge to the right edge of the exit road.",
+  "vehicles": [
+    "Vehicle 1",
+    "Vehicle 2",
+    "Vehicle 3"
+  ],
+  "constraints": {
+    "vehicle_speeds": [],
+    "spawn_relations": [],
+    "lane_changes": [
+      {
+        "vehicle": "Vehicle 3",
+        "type": "merge_into_lane_of",
+        "target": "Vehicle 1",
+        "style": "cut_off",
+        "timing": "near_conflict"
+      }
+    ],
+    "options": {
+      "synchronize_conflicts": true
+    }
+  }
+}

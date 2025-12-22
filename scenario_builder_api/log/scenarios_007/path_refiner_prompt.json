@@ -1,0 +1,33 @@
+{
+  "description": "Vehicle 1 goes straight through an intersection. Vehicle 2 is traveling in the same direction as Vehicle 1 and starts in front of Vehicle 1 in the same lane on Vehicle 1\u2019s approach road. Vehicle 3 is traveling in the same direction as Vehicle 1 and starts between Vehicle 1 and Vehicle 2 in the adjacent lane. On Vehicle 1\u2019s exit road, first there are 3 cones near the center of Vehicle 1\u2019s lane, and then farther down the exit road a pedestrian crosses perpendicularly from the right edge to the left edge of the road.",
+  "vehicles": [
+    "Vehicle 1",
+    "Vehicle 2",
+    "Vehicle 3"
+  ],
+  "constraints": {
+    "vehicle_speeds": [],
+    "spawn_relations": [
+      {
+        "type": "ahead_of",
+        "a": "Vehicle 2",
+        "b": "Vehicle 1",
+        "distance_m": 10.0,
+        "tolerance_m": 6.0,
+        "allow_other_lane": true
+      },
+      {
+        "type": "ahead_of",
+        "a": "Vehicle 3",
+        "b": "Vehicle 1",
+        "distance_m": 10.0,
+        "tolerance_m": 6.0,
+        "allow_other_lane": true
+      }
+    ],
+    "lane_changes": [],
+    "options": {
+      "synchronize_conflicts": true
+    }
+  }
+}

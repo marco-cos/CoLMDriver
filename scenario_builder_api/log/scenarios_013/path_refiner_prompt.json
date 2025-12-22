@@ -1,0 +1,24 @@
+{
+  "description": "Vehicle 1 goes straight through an intersection. Vehicle 2 approaches from the perpendicular road to the right of Vehicle 1\u2019s approach and turns right onto Vehicle 1\u2019s exit road. Vehicle 3 is traveling in the same direction as Vehicle 1 and starts behind Vehicle 1 in an adjacent lane; Vehicle 3 changes lanes into Vehicle 1\u2019s lane on the exit road. Near the merge region on the exit road, a parked car partially blocks the right edge of Vehicle 1\u2019s lane. A bicyclist travels in the adjacent lane on the exit road in the same direction as Vehicle 1, starting shortly after the intersection.",
+  "vehicles": [
+    "Vehicle 1",
+    "Vehicle 2",
+    "Vehicle 3"
+  ],
+  "constraints": {
+    "vehicle_speeds": [],
+    "spawn_relations": [],
+    "lane_changes": [
+      {
+        "vehicle": "Vehicle 3",
+        "type": "merge_into_lane_of",
+        "target": "Vehicle 1",
+        "style": "cut_off",
+        "timing": "near_conflict"
+      }
+    ],
+    "options": {
+      "synchronize_conflicts": true
+    }
+  }
+}

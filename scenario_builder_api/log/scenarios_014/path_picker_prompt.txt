@@ -1,0 +1,1486 @@
+You are given a list of candidate vehicle paths in a road network.
+Each candidate has a NAME plus a compact SIGNATURE describing its entry direction,
+exit direction, and overall maneuver.
+
+TASK:
+Given a user scenario description (vehicles and their intended motions), choose the
+best matching candidate path NAME for each moving vehicle.
+Ignore static or parked objects; only assign paths to moving vehicles.
+
+HOW TO INTERPRET THE DESCRIPTION (IMPORTANT):
+- Vehicles are described relative to roads, directions, and other vehicles.
+- Phrases like 'coming from X', 'approaching from X', or 'on the X road' constrain
+  the ENTRY direction of the path.
+- Phrases like 'onto X', 'to X', or 'leaves onto X' constrain the EXIT direction.
+- If a vehicle is described as coming from the same direction as another vehicle,
+  their chosen paths should have the same or compatible entry direction.
+- If a T-junction is mentioned, the 'main road' refers to the straight-through road
+  and the 'side road' refers to the terminating branch.
+
+PERPENDICULAR / CROSS-TRAFFIC INTERPRETATION (CRITICAL):
+- 'Perpendicular road to the RIGHT of Vehicle X's approach': if Vehicle X is westbound (W),
+  the road to their right is the southbound road (entry=S). If Vehicle X is eastbound (E),
+  the road to their right is the northbound road (entry=N). Apply 90-degree clockwise rotation.
+- 'Perpendicular road to the LEFT of Vehicle X's approach': apply 90-degree counter-clockwise.
+- 'Turns right onto Vehicle X's exit road': the vehicle's EXIT direction must match Vehicle X's
+  exit direction. If Vehicle X exits westbound (W), the turning vehicle must also exit W.
+- 'Turns left onto Vehicle X's exit road': same logic - EXIT directions must match.
+
+PATH SELECTION GUIDELINES:
+- First match the described source and destination semantics (where the vehicle comes from and goes to).
+- Then match the maneuver (left, right, straight).
+- Prefer paths whose entry and exit directions best align with the description,
+  even if multiple candidates share the same maneuver.
+- A path that reverses 'from' vs 'onto' semantics is a poor match and should only
+  be chosen if no better option exists.
+
+IMPORTANT RULES:
+1) Return JSON ONLY (no prose, no markdown, no code fences).
+2) path_name MUST be copied EXACTLY from one of the provided candidate name strings.
+3) If ambiguous, still pick the best match and include confidence in [0,1].
+
+CANDIDATE PATHS (JSON):
+{
+  "context": {
+    "nodes": "town_nodes/Town05.json",
+    "crop_region": {
+      "xmin": -94.32858333333331,
+      "xmax": -4.32858333333332,
+      "ymin": 44.326500000000024,
+      "ymax": 134.3265
+    },
+    "parameters": {
+      "max_yaw_diff_deg": 60.0,
+      "connect_radius_m": 6.0,
+      "min_path_length_m": 20.0,
+      "max_paths": 100,
+      "max_depth": 5,
+      "turn_frame": "WORLD_FRAME"
+    },
+    "num_candidates": 64,
+    "turn_frame": "WORLD_FRAME"
+  },
+  "candidates": [
+    {
+      "name": "path_001__man=left__entry=W(0deg)__exit=S(-90deg)__len=110.7m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.0668450457707479,
+        "road_id": 22,
+        "lane_id": 1
+      },
+      "exit": {
+        "cardinal4": "S",
+        "heading_deg": -89.62277679964946,
+        "road_id": 40,
+        "lane_id": 1
+      },
+      "entry_to_exit_turn": "left",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 110.71728820477585
+    },
+    {
+      "name": "path_002__man=left__entry=W(0deg)__exit=S(-90deg)__len=110.7m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.0668450457707479,
+        "road_id": 22,
+        "lane_id": 1
+      },
+      "exit": {
+        "cardinal4": "S",
+        "heading_deg": -89.61800196304445,
+        "road_id": 40,
+        "lane_id": 2
+      },
+      "entry_to_exit_turn": "left",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 110.71728820477585
+    },
+    {
+      "name": "path_003__man=straight__entry=W(0deg)__exit=W(0deg)__len=124.0m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.0668450457707479,
+        "road_id": 22,
+        "lane_id": 1
+      },
+      "exit": {
+        "cardinal4": "W",
+        "heading_deg": 0.06684504577080475,
+        "road_id": 21,
+        "lane_id": 2
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 124.00008574996517
+    },
+    {
+      "name": "path_004__man=straight__entry=W(0deg)__exit=W(0deg)__len=124.0m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.0668450457707479,
+        "road_id": 22,
+        "lane_id": 1
+      },
+      "exit": {
+        "cardinal4": "W",
+        "heading_deg": 0.06684504577080475,
+        "road_id": 21,
+        "lane_id": 1
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 124.00008574996518
+    },
+    {
+      "name": "path_005__man=uturn__entry=W(0deg)__exit=E(-180deg)__len=137.2m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.0668450457707479,
+        "road_id": 22,
+        "lane_id": 1
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.72784709411724,
+        "road_id": 41,
+        "lane_id": -2
+      },
+      "entry_to_exit_turn": "uturn",
+      "maneuvers_between": [
+        "right",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 137.19118407223067
+    },
+    {
+      "name": "path_006__man=uturn__entry=W(0deg)__exit=E(-180deg)__len=142.7m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.0668450457707479,
+        "road_id": 22,
+        "lane_id": 1
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.7278244131595,
+        "road_id": 41,
+        "lane_id": -1
+      },
+      "entry_to_exit_turn": "uturn",
+      "maneuvers_between": [
+        "right",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 142.68150488474137
+    },
+    {
+      "name": "path_007__man=straight__entry=W(0deg)__exit=W(0deg)__len=124.0m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.0668450457707479,
+        "road_id": 22,
+        "lane_id": 1
+      },
+      "exit": {
+        "cardinal4": "W",
+        "heading_deg": 0.06684504577080475,
+        "road_id": 21,
+        "lane_id": 2
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 124.00008574996517
+    },
+    {
+      "name": "path_008__man=straight__entry=W(0deg)__exit=W(0deg)__len=124.0m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.0668450457707479,
+        "road_id": 22,
+        "lane_id": 1
+      },
+      "exit": {
+        "cardinal4": "W",
+        "heading_deg": 0.06684504577080475,
+        "road_id": 21,
+        "lane_id": 1
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 124.00008574996518
+    },
+    {
+      "name": "path_009__man=left__entry=W(0deg)__exit=S(-90deg)__len=110.7m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.0668450457707479,
+        "road_id": 22,
+        "lane_id": 2
+      },
+      "exit": {
+        "cardinal4": "S",
+        "heading_deg": -89.62277679964946,
+        "road_id": 40,
+        "lane_id": 1
+      },
+      "entry_to_exit_turn": "left",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 110.71728820477588
+    },
+    {
+      "name": "path_010__man=left__entry=W(0deg)__exit=S(-90deg)__len=110.7m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.0668450457707479,
+        "road_id": 22,
+        "lane_id": 2
+      },
+      "exit": {
+        "cardinal4": "S",
+        "heading_deg": -89.61800196304445,
+        "road_id": 40,
+        "lane_id": 2
+      },
+      "entry_to_exit_turn": "left",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 110.71728820477587
+    },
+    {
+      "name": "path_011__man=straight__entry=W(0deg)__exit=W(0deg)__len=124.0m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.0668450457707479,
+        "road_id": 22,
+        "lane_id": 2
+      },
+      "exit": {
+        "cardinal4": "W",
+        "heading_deg": 0.06684504577080475,
+        "road_id": 21,
+        "lane_id": 2
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 124.00008574996517
+    },
+    {
+      "name": "path_012__man=straight__entry=W(0deg)__exit=W(0deg)__len=124.0m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.0668450457707479,
+        "road_id": 22,
+        "lane_id": 2
+      },
+      "exit": {
+        "cardinal4": "W",
+        "heading_deg": 0.06684504577080475,
+        "road_id": 21,
+        "lane_id": 1
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 124.00008574996518
+    },
+    {
+      "name": "path_013__man=uturn__entry=W(0deg)__exit=E(-180deg)__len=137.2m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.0668450457707479,
+        "road_id": 22,
+        "lane_id": 2
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.72784709411724,
+        "road_id": 41,
+        "lane_id": -2
+      },
+      "entry_to_exit_turn": "uturn",
+      "maneuvers_between": [
+        "right",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 137.19118407223067
+    },
+    {
+      "name": "path_014__man=uturn__entry=W(0deg)__exit=E(-180deg)__len=142.7m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.0668450457707479,
+        "road_id": 22,
+        "lane_id": 2
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.7278244131595,
+        "road_id": 41,
+        "lane_id": -1
+      },
+      "entry_to_exit_turn": "uturn",
+      "maneuvers_between": [
+        "right",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 142.6815048847414
+    },
+    {
+      "name": "path_015__man=straight__entry=W(0deg)__exit=W(0deg)__len=124.0m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.0668450457707479,
+        "road_id": 22,
+        "lane_id": 2
+      },
+      "exit": {
+        "cardinal4": "W",
+        "heading_deg": 0.06684504577080475,
+        "road_id": 21,
+        "lane_id": 2
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 124.00008574996517
+    },
+    {
+      "name": "path_016__man=straight__entry=W(0deg)__exit=W(0deg)__len=124.0m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.0668450457707479,
+        "road_id": 22,
+        "lane_id": 2
+      },
+      "exit": {
+        "cardinal4": "W",
+        "heading_deg": 0.06684504577080475,
+        "road_id": 21,
+        "lane_id": 1
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 124.00008574996518
+    },
+    {
+      "name": "path_017__man=right__entry=E(-180deg)__exit=S(-90deg)__len=103.2m__n=3segs",
+      "entry": {
+        "cardinal4": "E",
+        "heading_deg": -179.9331549542292,
+        "road_id": 21,
+        "lane_id": -2
+      },
+      "exit": {
+        "cardinal4": "S",
+        "heading_deg": -89.62277679964946,
+        "road_id": 40,
+        "lane_id": 1
+      },
+      "entry_to_exit_turn": "right",
+      "maneuvers_between": [
+        "right",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 103.21947672536493
+    },
+    {
+      "name": "path_018__man=right__entry=E(-180deg)__exit=S(-90deg)__len=103.2m__n=3segs",
+      "entry": {
+        "cardinal4": "E",
+        "heading_deg": -179.9331549542292,
+        "road_id": 21,
+        "lane_id": -2
+      },
+      "exit": {
+        "cardinal4": "S",
+        "heading_deg": -89.61800196304445,
+        "road_id": 40,
+        "lane_id": 2
+      },
+      "entry_to_exit_turn": "right",
+      "maneuvers_between": [
+        "right",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 103.21947672536493
+    },
+    {
+      "name": "path_019__man=straight__entry=E(-180deg)__exit=E(-180deg)__len=124.0m__n=3segs",
+      "entry": {
+        "cardinal4": "E",
+        "heading_deg": -179.9331549542292,
+        "road_id": 21,
+        "lane_id": -2
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.93315495422925,
+        "road_id": 22,
+        "lane_id": -2
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 124.00008574996518
+    },
+    {
+      "name": "path_020__man=straight__entry=E(-180deg)__exit=E(-180deg)__len=124.0m__n=3segs",
+      "entry": {
+        "cardinal4": "E",
+        "heading_deg": -179.9331549542292,
+        "road_id": 21,
+        "lane_id": -2
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.93315495422925,
+        "road_id": 22,
+        "lane_id": -1
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 124.0000857499652
+    },
+    {
+      "name": "path_021__man=straight__entry=E(-180deg)__exit=E(-180deg)__len=124.0m__n=3segs",
+      "entry": {
+        "cardinal4": "E",
+        "heading_deg": -179.9331549542292,
+        "road_id": 21,
+        "lane_id": -2
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.93315495422925,
+        "road_id": 22,
+        "lane_id": -2
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 124.00008574996518
+    },
+    {
+      "name": "path_022__man=straight__entry=E(-180deg)__exit=E(-180deg)__len=124.0m__n=3segs",
+      "entry": {
+        "cardinal4": "E",
+        "heading_deg": -179.9331549542292,
+        "road_id": 21,
+        "lane_id": -2
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.93315495422925,
+        "road_id": 22,
+        "lane_id": -1
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 124.0000857499652
+    },
+    {
+      "name": "path_023__man=straight__entry=E(-180deg)__exit=E(-180deg)__len=154.5m__n=3segs",
+      "entry": {
+        "cardinal4": "E",
+        "heading_deg": -179.9331549542292,
+        "road_id": 21,
+        "lane_id": -2
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.72784709411724,
+        "road_id": 41,
+        "lane_id": -2
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 154.4733305543313
+    },
+    {
+      "name": "path_024__man=straight__entry=E(-180deg)__exit=E(-180deg)__len=160.0m__n=3segs",
+      "entry": {
+        "cardinal4": "E",
+        "heading_deg": -179.9331549542292,
+        "road_id": 21,
+        "lane_id": -2
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.7278244131595,
+        "road_id": 41,
+        "lane_id": -1
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 159.96365136684202
+    },
+    {
+      "name": "path_025__man=right__entry=E(-180deg)__exit=S(-90deg)__len=103.2m__n=3segs",
+      "entry": {
+        "cardinal4": "E",
+        "heading_deg": -179.9331549542292,
+        "road_id": 21,
+        "lane_id": -1
+      },
+      "exit": {
+        "cardinal4": "S",
+        "heading_deg": -89.62277679964946,
+        "road_id": 40,
+        "lane_id": 1
+      },
+      "entry_to_exit_turn": "right",
+      "maneuvers_between": [
+        "right",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 103.21947672536493
+    },
+    {
+      "name": "path_026__man=right__entry=E(-180deg)__exit=S(-90deg)__len=103.2m__n=3segs",
+      "entry": {
+        "cardinal4": "E",
+        "heading_deg": -179.9331549542292,
+        "road_id": 21,
+        "lane_id": -1
+      },
+      "exit": {
+        "cardinal4": "S",
+        "heading_deg": -89.61800196304445,
+        "road_id": 40,
+        "lane_id": 2
+      },
+      "entry_to_exit_turn": "right",
+      "maneuvers_between": [
+        "right",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 103.21947672536491
+    },
+    {
+      "name": "path_027__man=straight__entry=E(-180deg)__exit=E(-180deg)__len=124.0m__n=3segs",
+      "entry": {
+        "cardinal4": "E",
+        "heading_deg": -179.9331549542292,
+        "road_id": 21,
+        "lane_id": -1
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.93315495422925,
+        "road_id": 22,
+        "lane_id": -2
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 124.00008574996518
+    },
+    {
+      "name": "path_028__man=straight__entry=E(-180deg)__exit=E(-180deg)__len=124.0m__n=3segs",
+      "entry": {
+        "cardinal4": "E",
+        "heading_deg": -179.9331549542292,
+        "road_id": 21,
+        "lane_id": -1
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.93315495422925,
+        "road_id": 22,
+        "lane_id": -1
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 124.0000857499652
+    },
+    {
+      "name": "path_029__man=straight__entry=E(-180deg)__exit=E(-180deg)__len=124.0m__n=3segs",
+      "entry": {
+        "cardinal4": "E",
+        "heading_deg": -179.9331549542292,
+        "road_id": 21,
+        "lane_id": -1
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.93315495422925,
+        "road_id": 22,
+        "lane_id": -2
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 124.00008574996518
+    },
+    {
+      "name": "path_030__man=straight__entry=E(-180deg)__exit=E(-180deg)__len=124.0m__n=3segs",
+      "entry": {
+        "cardinal4": "E",
+        "heading_deg": -179.9331549542292,
+        "road_id": 21,
+        "lane_id": -1
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.93315495422925,
+        "road_id": 22,
+        "lane_id": -1
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 124.0000857499652
+    },
+    {
+      "name": "path_031__man=straight__entry=E(-180deg)__exit=E(-180deg)__len=154.5m__n=3segs",
+      "entry": {
+        "cardinal4": "E",
+        "heading_deg": -179.9331549542292,
+        "road_id": 21,
+        "lane_id": -1
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.72784709411724,
+        "road_id": 41,
+        "lane_id": -2
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 154.4733305543313
+    },
+    {
+      "name": "path_032__man=straight__entry=E(-180deg)__exit=E(-180deg)__len=160.0m__n=3segs",
+      "entry": {
+        "cardinal4": "E",
+        "heading_deg": -179.9331549542292,
+        "road_id": 21,
+        "lane_id": -1
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.7278244131595,
+        "road_id": 41,
+        "lane_id": -1
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 159.96365136684202
+    },
+    {
+      "name": "path_033__man=right__entry=N(90deg)__exit=E(-180deg)__len=143.8m__n=3segs",
+      "entry": {
+        "cardinal4": "N",
+        "heading_deg": 90.37719176599217,
+        "road_id": 40,
+        "lane_id": -2
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.72784709411724,
+        "road_id": 41,
+        "lane_id": -2
+      },
+      "entry_to_exit_turn": "right",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 143.75774993544877
+    },
+    {
+      "name": "path_034__man=right__entry=N(90deg)__exit=E(-180deg)__len=149.2m__n=3segs",
+      "entry": {
+        "cardinal4": "N",
+        "heading_deg": 90.37719176599217,
+        "road_id": 40,
+        "lane_id": -2
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.7278244131595,
+        "road_id": 41,
+        "lane_id": -1
+      },
+      "entry_to_exit_turn": "right",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 149.24807074795945
+    },
+    {
+      "name": "path_035__man=right__entry=N(90deg)__exit=E(-180deg)__len=99.3m__n=3segs",
+      "entry": {
+        "cardinal4": "N",
+        "heading_deg": 90.37719176599217,
+        "road_id": 40,
+        "lane_id": -2
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.93315495422925,
+        "road_id": 22,
+        "lane_id": -2
+      },
+      "entry_to_exit_turn": "right",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 99.26797479827606
+    },
+    {
+      "name": "path_036__man=right__entry=N(90deg)__exit=E(-180deg)__len=99.3m__n=3segs",
+      "entry": {
+        "cardinal4": "N",
+        "heading_deg": 90.37719176599217,
+        "road_id": 40,
+        "lane_id": -2
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.93315495422925,
+        "road_id": 22,
+        "lane_id": -1
+      },
+      "entry_to_exit_turn": "right",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 99.26797479827607
+    },
+    {
+      "name": "path_037__man=left__entry=N(90deg)__exit=W(0deg)__len=114.7m__n=3segs",
+      "entry": {
+        "cardinal4": "N",
+        "heading_deg": 90.37719176599217,
+        "road_id": 40,
+        "lane_id": -2
+      },
+      "exit": {
+        "cardinal4": "W",
+        "heading_deg": 0.06684504577080475,
+        "road_id": 21,
+        "lane_id": 2
+      },
+      "entry_to_exit_turn": "left",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 114.68328136410898
+    },
+    {
+      "name": "path_038__man=left__entry=N(90deg)__exit=W(0deg)__len=114.7m__n=3segs",
+      "entry": {
+        "cardinal4": "N",
+        "heading_deg": 90.37719176599217,
+        "road_id": 40,
+        "lane_id": -2
+      },
+      "exit": {
+        "cardinal4": "W",
+        "heading_deg": 0.06684504577080475,
+        "road_id": 21,
+        "lane_id": 1
+      },
+      "entry_to_exit_turn": "left",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 114.68328136410898
+    },
+    {
+      "name": "path_039__man=right__entry=N(90deg)__exit=E(-180deg)__len=143.8m__n=3segs",
+      "entry": {
+        "cardinal4": "N",
+        "heading_deg": 90.37719176599217,
+        "road_id": 40,
+        "lane_id": -2
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.72784709411724,
+        "road_id": 41,
+        "lane_id": -2
+      },
+      "entry_to_exit_turn": "right",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 143.75674995658366
+    },
+    {
+      "name": "path_040__man=right__entry=N(90deg)__exit=E(-180deg)__len=149.2m__n=3segs",
+      "entry": {
+        "cardinal4": "N",
+        "heading_deg": 90.37719176599217,
+        "road_id": 40,
+        "lane_id": -2
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.7278244131595,
+        "road_id": 41,
+        "lane_id": -1
+      },
+      "entry_to_exit_turn": "right",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 149.24707076909436
+    },
+    {
+      "name": "path_041__man=right__entry=N(90deg)__exit=E(-180deg)__len=143.8m__n=3segs",
+      "entry": {
+        "cardinal4": "N",
+        "heading_deg": 90.37719176599217,
+        "road_id": 40,
+        "lane_id": -1
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.72784709411724,
+        "road_id": 41,
+        "lane_id": -2
+      },
+      "entry_to_exit_turn": "right",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 143.75875666415988
+    },
+    {
+      "name": "path_042__man=right__entry=N(90deg)__exit=E(-180deg)__len=149.2m__n=3segs",
+      "entry": {
+        "cardinal4": "N",
+        "heading_deg": 90.37719176599217,
+        "road_id": 40,
+        "lane_id": -1
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.7278244131595,
+        "road_id": 41,
+        "lane_id": -1
+      },
+      "entry_to_exit_turn": "right",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 149.2490774766706
+    },
+    {
+      "name": "path_043__man=right__entry=N(90deg)__exit=E(-180deg)__len=99.3m__n=3segs",
+      "entry": {
+        "cardinal4": "N",
+        "heading_deg": 90.37719176599217,
+        "road_id": 40,
+        "lane_id": -1
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.93315495422925,
+        "road_id": 22,
+        "lane_id": -2
+      },
+      "entry_to_exit_turn": "right",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 99.26898152698719
+    },
+    {
+      "name": "path_044__man=right__entry=N(90deg)__exit=E(-180deg)__len=99.3m__n=3segs",
+      "entry": {
+        "cardinal4": "N",
+        "heading_deg": 90.37719176599217,
+        "road_id": 40,
+        "lane_id": -1
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.93315495422925,
+        "road_id": 22,
+        "lane_id": -1
+      },
+      "entry_to_exit_turn": "right",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 99.2689815269872
+    },
+    {
+      "name": "path_045__man=left__entry=N(90deg)__exit=W(0deg)__len=114.7m__n=3segs",
+      "entry": {
+        "cardinal4": "N",
+        "heading_deg": 90.37719176599217,
+        "road_id": 40,
+        "lane_id": -1
+      },
+      "exit": {
+        "cardinal4": "W",
+        "heading_deg": 0.06684504577080475,
+        "road_id": 21,
+        "lane_id": 2
+      },
+      "entry_to_exit_turn": "left",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 114.68428809282011
+    },
+    {
+      "name": "path_046__man=left__entry=N(90deg)__exit=W(0deg)__len=114.7m__n=3segs",
+      "entry": {
+        "cardinal4": "N",
+        "heading_deg": 90.37719176599217,
+        "road_id": 40,
+        "lane_id": -1
+      },
+      "exit": {
+        "cardinal4": "W",
+        "heading_deg": 0.06684504577080475,
+        "road_id": 21,
+        "lane_id": 1
+      },
+      "entry_to_exit_turn": "left",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 114.68428809282011
+    },
+    {
+      "name": "path_047__man=right__entry=N(90deg)__exit=E(-180deg)__len=143.8m__n=3segs",
+      "entry": {
+        "cardinal4": "N",
+        "heading_deg": 90.37719176599217,
+        "road_id": 40,
+        "lane_id": -1
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.72784709411724,
+        "road_id": 41,
+        "lane_id": -2
+      },
+      "entry_to_exit_turn": "right",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 143.7577566852948
+    },
+    {
+      "name": "path_048__man=right__entry=N(90deg)__exit=E(-180deg)__len=149.2m__n=3segs",
+      "entry": {
+        "cardinal4": "N",
+        "heading_deg": 90.37719176599217,
+        "road_id": 40,
+        "lane_id": -1
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.7278244131595,
+        "road_id": 41,
+        "lane_id": -1
+      },
+      "entry_to_exit_turn": "right",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 149.2480774978055
+    },
+    {
+      "name": "path_049__man=uturn__entry=W(0deg)__exit=E(-180deg)__len=159.5m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.27215290588276275,
+        "road_id": 41,
+        "lane_id": 1
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.93315495422925,
+        "road_id": 22,
+        "lane_id": -2
+      },
+      "entry_to_exit_turn": "uturn",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 159.47438765409444
+    },
+    {
+      "name": "path_050__man=uturn__entry=W(0deg)__exit=E(-180deg)__len=159.5m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.27215290588276275,
+        "road_id": 41,
+        "lane_id": 1
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.93315495422925,
+        "road_id": 22,
+        "lane_id": -1
+      },
+      "entry_to_exit_turn": "uturn",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 159.47438765409444
+    },
+    {
+      "name": "path_051__man=left__entry=W(0deg)__exit=S(-90deg)__len=154.7m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.27215290588276275,
+        "road_id": 41,
+        "lane_id": 1
+      },
+      "exit": {
+        "cardinal4": "S",
+        "heading_deg": -89.62277679964946,
+        "road_id": 40,
+        "lane_id": 1
+      },
+      "entry_to_exit_turn": "left",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 154.73810539955073
+    },
+    {
+      "name": "path_052__man=left__entry=W(0deg)__exit=S(-90deg)__len=154.7m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.27215290588276275,
+        "road_id": 41,
+        "lane_id": 1
+      },
+      "exit": {
+        "cardinal4": "S",
+        "heading_deg": -89.61800196304445,
+        "road_id": 40,
+        "lane_id": 2
+      },
+      "entry_to_exit_turn": "left",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 154.7381053995507
+    },
+    {
+      "name": "path_053__man=left__entry=W(0deg)__exit=S(-90deg)__len=154.7m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.27215290588276275,
+        "road_id": 41,
+        "lane_id": 1
+      },
+      "exit": {
+        "cardinal4": "S",
+        "heading_deg": -89.62277679964946,
+        "road_id": 40,
+        "lane_id": 1
+      },
+      "entry_to_exit_turn": "left",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 154.73810539955073
+    },
+    {
+      "name": "path_054__man=left__entry=W(0deg)__exit=S(-90deg)__len=154.7m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.27215290588276275,
+        "road_id": 41,
+        "lane_id": 1
+      },
+      "exit": {
+        "cardinal4": "S",
+        "heading_deg": -89.61800196304445,
+        "road_id": 40,
+        "lane_id": 2
+      },
+      "entry_to_exit_turn": "left",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 154.7381053995507
+    },
+    {
+      "name": "path_055__man=straight__entry=W(0deg)__exit=W(0deg)__len=154.0m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.27215290588276275,
+        "road_id": 41,
+        "lane_id": 1
+      },
+      "exit": {
+        "cardinal4": "W",
+        "heading_deg": 0.06684504577080475,
+        "road_id": 21,
+        "lane_id": 2
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 153.97677031143004
+    },
+    {
+      "name": "path_056__man=straight__entry=W(0deg)__exit=W(0deg)__len=154.0m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.27215290588276275,
+        "road_id": 41,
+        "lane_id": 1
+      },
+      "exit": {
+        "cardinal4": "W",
+        "heading_deg": 0.06684504577080475,
+        "road_id": 21,
+        "lane_id": 1
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 153.97677031143007
+    },
+    {
+      "name": "path_057__man=uturn__entry=W(0deg)__exit=E(-180deg)__len=165.0m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.27215290588276275,
+        "road_id": 41,
+        "lane_id": 2
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.93315495422925,
+        "road_id": 22,
+        "lane_id": -2
+      },
+      "entry_to_exit_turn": "uturn",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 164.96454538763396
+    },
+    {
+      "name": "path_058__man=uturn__entry=W(0deg)__exit=E(-180deg)__len=165.0m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.27215290588276275,
+        "road_id": 41,
+        "lane_id": 2
+      },
+      "exit": {
+        "cardinal4": "E",
+        "heading_deg": -179.93315495422925,
+        "road_id": 22,
+        "lane_id": -1
+      },
+      "entry_to_exit_turn": "uturn",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 164.96454538763396
+    },
+    {
+      "name": "path_059__man=left__entry=W(0deg)__exit=S(-90deg)__len=160.2m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.27215290588276275,
+        "road_id": 41,
+        "lane_id": 2
+      },
+      "exit": {
+        "cardinal4": "S",
+        "heading_deg": -89.62277679964946,
+        "road_id": 40,
+        "lane_id": 1
+      },
+      "entry_to_exit_turn": "left",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 160.22826313309022
+    },
+    {
+      "name": "path_060__man=left__entry=W(0deg)__exit=S(-90deg)__len=160.2m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.27215290588276275,
+        "road_id": 41,
+        "lane_id": 2
+      },
+      "exit": {
+        "cardinal4": "S",
+        "heading_deg": -89.61800196304445,
+        "road_id": 40,
+        "lane_id": 2
+      },
+      "entry_to_exit_turn": "left",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 160.22826313309022
+    },
+    {
+      "name": "path_061__man=left__entry=W(0deg)__exit=S(-90deg)__len=160.2m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.27215290588276275,
+        "road_id": 41,
+        "lane_id": 2
+      },
+      "exit": {
+        "cardinal4": "S",
+        "heading_deg": -89.62277679964946,
+        "road_id": 40,
+        "lane_id": 1
+      },
+      "entry_to_exit_turn": "left",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 160.22826313309022
+    },
+    {
+      "name": "path_062__man=left__entry=W(0deg)__exit=S(-90deg)__len=160.2m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.27215290588276275,
+        "road_id": 41,
+        "lane_id": 2
+      },
+      "exit": {
+        "cardinal4": "S",
+        "heading_deg": -89.61800196304445,
+        "road_id": 40,
+        "lane_id": 2
+      },
+      "entry_to_exit_turn": "left",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 160.22826313309022
+    },
+    {
+      "name": "path_063__man=straight__entry=W(0deg)__exit=W(0deg)__len=159.5m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.27215290588276275,
+        "road_id": 41,
+        "lane_id": 2
+      },
+      "exit": {
+        "cardinal4": "W",
+        "heading_deg": 0.06684504577080475,
+        "road_id": 21,
+        "lane_id": 2
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 159.46692804496956
+    },
+    {
+      "name": "path_064__man=straight__entry=W(0deg)__exit=W(0deg)__len=159.5m__n=3segs",
+      "entry": {
+        "cardinal4": "W",
+        "heading_deg": 0.27215290588276275,
+        "road_id": 41,
+        "lane_id": 2
+      },
+      "exit": {
+        "cardinal4": "W",
+        "heading_deg": 0.06684504577080475,
+        "road_id": 21,
+        "lane_id": 1
+      },
+      "entry_to_exit_turn": "straight",
+      "maneuvers_between": [
+        "straight",
+        "straight"
+      ],
+      "num_segments": 3,
+      "length_m": 159.46692804496956
+    }
+  ],
+  "output_schema": {
+    "vehicles": [
+      {
+        "vehicle": "Vehicle 1",
+        "path_name": "path_###__...",
+        "confidence": 0.0
+      }
+    ]
+  }
+}
+
+USER SCENARIO DESCRIPTION:
+Vehicle 1 is traveling straight in the right hand lane of a 4 lane road. A sequence of 6 cones forms a mild chicane within Vehicle 1’s lane: cones alternate between being near the right edge and near the left edge, but always leave at least half the lane width passable. Vehicle 2 is traveling in the same direction as Vehicle 1 and starts behind Vehicle 1 in the adjacent lane; Vehicle 2 changes lanes into Vehicle 1’s lane after the last cone. Vehicle 3 is traveling straight in the opposite direction (oncoming relative to Vehicle 1).
+(Only assign paths to moving vehicles; ignore static/parked props.)

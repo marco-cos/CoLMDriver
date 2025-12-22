@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<routes>
+  <route id="003" town="Town05" role="bicycle" model="vehicle.bh.crossbike" speed="4.0">
+    <waypoint x="-124.047" y="75.892" z="0.000" yaw="-90.501325"/>
+    <waypoint x="-124.069" y="73.321" z="0.000" yaw="-90.501325"/>
+    <waypoint x="-124.092" y="70.749" z="0.000" yaw="-90.515734"/>
+    <waypoint x="-124.115" y="68.178" z="0.000" yaw="-90.515734"/>
+    <waypoint x="-124.139" y="65.607" z="0.000" yaw="-90.506100"/>
+    <waypoint x="-124.161" y="63.035" z="0.000" yaw="-90.506100"/>
+    <waypoint x="-124.184" y="60.464" z="0.000" yaw="-90.506100"/>
+    <waypoint x="-124.207" y="57.893" z="0.000" yaw="-90.515648"/>
+  </route>
+</routes>

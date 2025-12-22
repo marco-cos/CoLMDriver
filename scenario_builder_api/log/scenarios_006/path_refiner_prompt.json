@@ -1,0 +1,24 @@
+{
+  "description": "Vehicle 1 is traveling straight along a two-lane road segment (two lanes in Vehicle 1\u2019s direction). A diagonal line of 6 cones partially blocks Vehicle 1\u2019s lane: the first cone starts near the right edge of Vehicle 1\u2019s lane and the last cone ends near the center of the lane, leaving the left half of the lane passable. Thirty meters after the last cone, a parked car partially blocks the left edge of Vehicle 1\u2019s lane. Vehicle 2 is traveling straight in the opposite direction (oncoming relative to Vehicle 1). Vehicle 3 is traveling in the same direction as Vehicle 1 and starts behind Vehicle 1 in the adjacent lane; Vehicle 3 changes lanes into Vehicle 1\u2019s lane in the open segment between the cones and the parked car.",
+  "vehicles": [
+    "Vehicle 1",
+    "Vehicle 2",
+    "Vehicle 3"
+  ],
+  "constraints": {
+    "vehicle_speeds": [],
+    "spawn_relations": [],
+    "lane_changes": [
+      {
+        "vehicle": "Vehicle 3",
+        "type": "merge_into_lane_of",
+        "target": "Vehicle 1",
+        "style": "cut_off",
+        "timing": "near_conflict"
+      }
+    ],
+    "options": {
+      "synchronize_conflicts": true
+    }
+  }
+}

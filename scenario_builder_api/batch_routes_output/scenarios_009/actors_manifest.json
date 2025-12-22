@@ -1,0 +1,53 @@
+{
+  "bicycle": [],
+  "ego": [
+    {
+      "file": "town05_vehicle_1_0.xml",
+      "kind": "ego",
+      "name": "Vehicle 1",
+      "route_id": "009",
+      "speed": 9.0,
+      "town": "Town05"
+    }
+  ],
+  "npc": [
+    {
+      "file": "town05_vehicle_2_1.xml",
+      "kind": "npc",
+      "name": "Vehicle 2",
+      "route_id": "009",
+      "speed": 6.0,
+      "town": "Town05"
+    },
+    {
+      "file": "town05_vehicle_3_2.xml",
+      "kind": "npc",
+      "name": "Vehicle 3",
+      "route_id": "009",
+      "speed": 8.0,
+      "town": "Town05"
+    }
+  ],
+  "pedestrian": [
+    {
+      "file": "actors/pedestrians/town05_entity_2_pedestrian.xml",
+      "kind": "pedestrian",
+      "model": "walker.pedestrian.0001",
+      "name": "entity_2",
+      "route_id": "009",
+      "speed": 1.7,
+      "town": "Town05"
+    }
+  ],
+  "static": [
+    {
+      "file": "actors/static/town05_entity_1_parked_truck.xml",
+      "kind": "static",
+      "model": "vehicle.tesla.cybertruck",
+      "name": "entity_1",
+      "route_id": "009",
+      "speed": 0.0,
+      "town": "Town05"
+    }
+  ]
+}
