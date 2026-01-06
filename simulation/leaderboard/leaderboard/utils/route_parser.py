@@ -47,19 +47,41 @@ def _resolve_routes_dir(manifest_path: Path) -> Path:
 def _load_custom_actor_manifest() -> Dict[str, List[Dict[str, object]]]:
     """
     Load and cache the custom actor manifest if present.
+    Checks environment variable first, then looks for actors_manifest.json in standard locations.
     """
     global _CUSTOM_ACTOR_MANIFEST_CACHE  # pylint: disable=global-statement
 
     if _CUSTOM_ACTOR_MANIFEST_CACHE is not None:
         return _CUSTOM_ACTOR_MANIFEST_CACHE
 
+    manifest_path = None
+    
+    # Try environment variable first
     manifest_env = os.environ.get("CUSTOM_ACTOR_MANIFEST")
-    if not manifest_env:
-        _CUSTOM_ACTOR_MANIFEST_CACHE = {}
-        return _CUSTOM_ACTOR_MANIFEST_CACHE
-
-    manifest_path = Path(manifest_env).expanduser().resolve()
-    if not manifest_path.exists():
+    if manifest_env:
+        manifest_path = Path(manifest_env).expanduser().resolve()
+    
+    # If not found in env or doesn't exist, look for it in route directories
+    if not manifest_path or not manifest_path.exists():
+        # Look for actors_manifest.json in scenario route subdirectories
+        # Try to find any actors_manifest.json in routes-like directories
+        candidates = [
+            Path.cwd() / "routes" / "actors_manifest.json",
+            Path.cwd() / "scenario_builder_api" / "routes" / "actors_manifest.json",
+        ]
+        
+        # Also check for manifests in route subdirectories (e.g., routes/Scenario_1_attempt1/actors_manifest.json)
+        for routes_dir in [Path.cwd() / "routes", Path.cwd() / "scenario_builder_api" / "routes"]:
+            if routes_dir.exists():
+                for subdir_manifest in routes_dir.glob("*/actors_manifest.json"):
+                    candidates.append(subdir_manifest)
+        
+        for candidate in candidates:
+            if candidate.exists():
+                manifest_path = candidate
+                break
+    
+    if not manifest_path or not manifest_path.exists():
         _CUSTOM_ACTOR_MANIFEST_CACHE = {}
         return _CUSTOM_ACTOR_MANIFEST_CACHE
 

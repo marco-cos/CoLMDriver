@@ -360,7 +360,7 @@ class V2XVERSEBaseDataset(Dataset):
             actors_data = self.filter_actors_data_according_to_visible(actors_data, visible_actors)
 
         ################ LSS debug TODO: clean up this function #####################
-        if not self.first_det:
+        if not getattr(self, 'first_det', False):
             import copy
             if True: # agent=='rsu':
                 measurements["affected_light_id"] = -1
@@ -382,7 +382,7 @@ class V2XVERSEBaseDataset(Dataset):
                 .astype(np.float32)
             )
             self.first_det = True
-            if self.label_mode == 'cop3':
+            if getattr(self, 'label_mode', 'v2xverse') == 'cop3':
                 self.first_det = False
         output_record['det_data'] = self.det_data
         ##############################################################

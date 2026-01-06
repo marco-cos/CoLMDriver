@@ -1,6 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<routes>
-  <route id="009" town="Town05" role="static" model="vehicle.tesla.cybertruck" speed="0.0">
-    <waypoint x="-123.181" y="74.884" z="0.000" yaw="-90.501325"/>
-  </route>
-</routes>
