@@ -66,6 +66,48 @@ class NegotiationMode:
     disable_comm: bool
 
 
+@dataclass(frozen=True)
+class PlannerSpec:
+    agent: str
+    agent_config: str
+
+
+PLANNER_SPECS: dict[str, PlannerSpec] = {
+    "colmdriver": PlannerSpec(
+        agent="simulation/leaderboard/team_code/colmdriver_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/colmdriver_config.yaml",
+    ),
+    "colmdriver_rulebase": PlannerSpec(
+        agent="simulation/leaderboard/team_code/colmdriver_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/colmdriver_rulebase_config.yaml",
+    ),
+    "codriving": PlannerSpec(
+        agent="simulation/leaderboard/team_code/pnp_agent_e2e_v2v.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/pnp_config_codriving_5_10.yaml",
+    ),
+    "tcp": PlannerSpec(
+        agent="simulation/leaderboard/team_code/tcp_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/tcp_5_10_config.yaml",
+    ),
+    "vad": PlannerSpec(
+        agent="simulation/leaderboard/team_code/vad_b2d_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/pnp_config_vad.yaml",
+    ),
+    "uniad": PlannerSpec(
+        agent="simulation/leaderboard/team_code/uniad_b2d_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/uniad.yaml",
+    ),
+    "lmdrive": PlannerSpec(
+        agent="simulation/leaderboard/team_code/lmdriver_agent.py",
+        agent_config="simulation/leaderboard/team_code/agent_config/lmdriver_config_8_10.py",
+    ),
+}
+
+DEFAULT_PLANNER = "colmdriver"
+DEFAULT_AGENT = PLANNER_SPECS[DEFAULT_PLANNER].agent
+DEFAULT_AGENT_CONFIG = PLANNER_SPECS[DEFAULT_PLANNER].agent_config
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     group = parser.add_mutually_exclusive_group(required=True)
@@ -118,14 +160,22 @@ def parse_args() -> argparse.Namespace:
         help="Scenario JSON to load alongside routes.",
     )
     parser.add_argument(
+        "--planner",
+        choices=sorted(PLANNER_SPECS.keys()),
+        help=(
+            "Select a predefined planner preset (sets --agent/--agent-config defaults). "
+            f"Defaults to {DEFAULT_PLANNER} if not set."
+        ),
+    )
+    parser.add_argument(
         "--agent",
-        default="simulation/leaderboard/team_code/colmdriver_agent.py",
-        help="Path to the evaluation agent Python file.",
+        default=None,
+        help="Path to the evaluation agent Python file (overrides --planner default).",
     )
     parser.add_argument(
         "--agent-config",
-        default="simulation/leaderboard/team_code/agent_config/colmdriver_config.yaml",
-        help="Agent configuration file.",
+        default=None,
+        help="Agent configuration file (overrides --planner default).",
     )
     parser.add_argument("--repetitions", type=int, default=1, help="Route repetitions.")
     parser.add_argument("--track", default="SENSORS", help="Leaderboard track name.")
@@ -275,6 +325,17 @@ def clone_routes_with_weather_override(
 
 def main() -> None:
     args = parse_args()
+    if args.planner:
+        planner = PLANNER_SPECS[args.planner]
+        if args.agent is None:
+            args.agent = planner.agent
+        if args.agent_config is None:
+            args.agent_config = planner.agent_config
+    else:
+        if args.agent is None:
+            args.agent = DEFAULT_AGENT
+        if args.agent_config is None:
+            args.agent_config = DEFAULT_AGENT_CONFIG
     repo_root = Path(__file__).resolve().parents[1]
 
     scenario_summary = None

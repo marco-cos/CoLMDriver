@@ -543,9 +543,22 @@ class LeaderboardEvaluator(object):
         print(f'''run with {args.ego_num} cars\n''')
         route_indexer_dict = {}
         route_path_dict = {}
-        route_name_list = os.listdir(args.routes_dir)
-        for route_name in route_name_list:
-            route_path_dict[route_name.split('.')[0].split('_')[-1]] = os.path.join(args.routes_dir,route_name)
+        
+        # Search recursively for XML files in the routes directory
+        # This handles nested scenario directories (e.g., routes/Scenario_Name/vehicle_*.xml)
+        import glob
+        xml_files = glob.glob(os.path.join(args.routes_dir, '**', '*.xml'), recursive=True)
+        
+        for xml_path in xml_files:
+            # Extract the ego_id from the filename (last part before .xml)
+            # e.g., "town05_vehicle_1_0.xml" -> "0"
+            filename = os.path.basename(xml_path)
+            ego_id_str = filename.split('.')[0].split('_')[-1]
+            
+            # Only add if not already present (in case of duplicates across scenarios)
+            if ego_id_str not in route_path_dict:
+                route_path_dict[ego_id_str] = xml_path
+        
         for ego_id in range(args.ego_num):
             route_indexer_dict[ego_id] = RouteIndexer(route_path_dict[str(ego_id)], args.scenarios, args.repetitions)
             if ego_id==0:

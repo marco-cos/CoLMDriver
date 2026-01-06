@@ -1063,8 +1063,14 @@ class RouteScenario(BasicScenario):
                 if snapped_wp is not None:
                     spawn_tf = snapped_wp.transform
 
+            # Add z-offset to prevent ground clipping (vehicles need this even when static)
+            model_str = str(actor_cfg.get("model", "")).lower()
+            is_vehicle_model = model_str.startswith("vehicle.")
             if role not in ("static", "static_prop"):
                 spawn_tf.location.z += 0.5
+            elif is_vehicle_model:
+                # Smaller offset for static/parked vehicles to avoid visible floating
+                spawn_tf.location.z += 0.1
 
             rolename = actor_cfg.get("rolename") or actor_cfg["name"]
             try:

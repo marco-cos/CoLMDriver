@@ -16,8 +16,8 @@ ANSI_ESCAPE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 STEP_TIME_PATTERN = re.compile(r"step infer time:\s*([0-9.]+)")
 FRAME_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 LABEL_PADDING = 14
-VEHICLE_DIR_PATTERN = re.compile(r"^(?:ego_vehicle|rgb_front|meta)_(\d+)$")
-ALLOWED_STREAM_PREFIXES = ("ego_vehicle_", "rgb_front_", "meta_" )
+VEHICLE_DIR_PATTERN = re.compile(r"^(?:ego_vehicle_|rgb_|meta_)(\d+)$")
+ALLOWED_STREAM_PREFIXES = ("ego_vehicle_", "rgb_", "meta_")
 
 
 @dataclass
@@ -720,7 +720,7 @@ def main() -> None:
         scenario_dirs = discover_scenario_dirs(root)
         if not scenario_dirs:
             raise FileNotFoundError(
-                f"No scenario directories with ego_vehicle_* images were found under {root}."
+                f"No scenario directories with vehicle images (rgb_*, meta_*, ego_vehicle_*) were found under {root}."
             )
 
     if len(scenario_dirs) > 1 and args.output:

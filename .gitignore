@@ -5,11 +5,14 @@ ChatScene/log
 ChatScene/oldlog
 ChatScene/oldexamplescenarios
 
+scenario_generator/log
+scenario_generator/routes
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
-
+reports/
 
 # C extensions
 *.so
